@@ -1,0 +1,212 @@
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import AuthGuard from '@/components/AuthGuard';
+import { getSocket } from '@/lib/socket';
+import { useAuth } from '@/lib/auth';
+
+// Debe coincidir con ALLOWED_TIME_CONTROLS del backend
+const TIME_CONTROLS: Array<{ value: string; label: string; sub: string }> = [
+  { value: '1+0',  label: '1 min',  sub: 'Bullet' },
+  { value: '3+0',  label: '3 min',  sub: 'Blitz' },
+  { value: '5+0',  label: '5 min',  sub: 'Blitz' },
+  { value: '10+0', label: '10 min', sub: 'Rápida' },
+];
+
+function LobbyInner() {
+  const router = useRouter();
+  const { user } = useAuth();
+  const [searching, setSearching] = useState(false);
+  const [countryFilter, setCountryFilter] = useState<'CO' | 'GLOBAL'>('GLOBAL');
+  const [timeControl, setTimeControl] = useState<string>('10+0');
+  const [error, setError] = useState<string | null>(null);
+  const [statusMsg, setStatusMsg] = useState<string>('');
+  const [expanded, setExpanded] = useState<boolean>(false); // si saltó CO->GLOBAL
+
+  // Necesitamos el valor "vivo" en el cleanup, sin re-suscribir el effect
+  const searchingRef = useRef(searching);
+  searchingRef.current = searching;
+
+  useEffect(() => {
+    const socket = getSocket();
+
+    function onMatchFound(payload: { gameId: string }) {
+      // Importante: setear searching=false ANTES de navegar para que el
+      // cleanup del effect (que se dispara al desmontar el lobby) no
+      // emita un match:cancel innecesario tras el router.push.
+      setSearching(false);
+      router.push(`/game/${payload.gameId}`);
+    }
+    function onMatchExpanded(_: { from: string; to: string }) {
+      setExpanded(true);
+      setStatusMsg('Buscamos en Colombia y no apareció nadie. Ampliando a global…');
+    }
+    function onMatchTimeout(payload: { message?: string }) {
+      setSearching(false);
+      setExpanded(false);
+      setStatusMsg('');
+      setError(payload?.message || 'No encontramos rival. Intenta de nuevo.');
+    }
+    function onConnectError(err: Error) {
+      setError(`No se pudo conectar al servidor: ${err.message}`);
+    }
+
+    socket.on('match:found', onMatchFound);
+    socket.on('match:expanded', onMatchExpanded);
+    socket.on('match:timeout', onMatchTimeout);
+    socket.on('connect_error', onConnectError);
+
+    return () => {
+      socket.off('match:found', onMatchFound);
+      socket.off('match:expanded', onMatchExpanded);
+      socket.off('match:timeout', onMatchTimeout);
+      socket.off('connect_error', onConnectError);
+      // Si seguimos en cola al desmontar, cancelamos
+      if (searchingRef.current) socket.emit('match:cancel');
+    };
+  }, [router]);
+
+  function findMatch() {
+    setError(null);
+    setExpanded(false);
+    setStatusMsg('Buscando rival…');
+    setSearching(true);
+    const socket = getSocket();
+    socket.emit(
+      'match:find',
+      { countryFilter, timeControl },
+      (ack: { ok: boolean; status?: string; gameId?: string; error?: string }) => {
+        if (!ack?.ok) {
+          setSearching(false);
+          setStatusMsg('');
+          setError(ack?.error || 'Error iniciando búsqueda');
+          return;
+        }
+        if (ack.status === 'matched' && ack.gameId) {
+          router.push(`/game/${ack.gameId}`);
+        } else {
+          setStatusMsg('En cola. Esperando rival…');
+        }
+      }
+    );
+  }
+
+  function cancelSearch() {
+    const socket = getSocket();
+    socket.emit('match:cancel', null, () => {
+      setSearching(false);
+      setExpanded(false);
+      setStatusMsg('');
+    });
+  }
+
+  return (
+    <section className="flex-1 max-w-4xl mx-auto w-full px-5 py-12">
+      <div className="mb-8">
+        <p className="text-accent font-medium uppercase tracking-widest text-xs">Lobby</p>
+        <h1 className="font-display text-4xl mt-1">Hola, {user?.username}.</h1>
+        <p className="text-wood-600 mt-1">Elige con quién quieres jugar y entra al tablero.</p>
+      </div>
+
+      <div className="card p-8">
+        <h2 className="font-display text-2xl mb-1">Encontrar partida</h2>
+        <p className="text-sm text-wood-600 mb-6">Elige tiempo y oponente.</p>
+
+        {/* ---------- TIEMPO ---------- */}
+        <label className="label">Tiempo</label>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-6">
+          {TIME_CONTROLS.map((tc) => (
+            <button
+              key={tc.value}
+              type="button"
+              onClick={() => setTimeControl(tc.value)}
+              disabled={searching}
+              className={`text-center p-3 rounded-lg border-2 transition ${
+                timeControl === tc.value
+                  ? 'border-accent bg-accent/5'
+                  : 'border-wood-100 hover:border-wood-200'
+              } disabled:opacity-50`}
+            >
+              <div className="font-display text-xl">{tc.label}</div>
+              <div className="text-xs text-wood-600">{tc.sub}</div>
+            </button>
+          ))}
+        </div>
+
+        {/* ---------- PAÍS ---------- */}
+        <label className="label">¿Contra quién?</label>
+        <div className="grid sm:grid-cols-2 gap-3 mb-6">
+          <button
+            type="button"
+            onClick={() => setCountryFilter('GLOBAL')}
+            className={`text-left p-4 rounded-lg border-2 transition ${
+              countryFilter === 'GLOBAL'
+                ? 'border-accent bg-accent/5'
+                : 'border-wood-100 hover:border-wood-200'
+            }`}
+            disabled={searching}
+          >
+            <div className="text-2xl">🌍</div>
+            <div className="font-medium mt-1">Global</div>
+            <div className="text-xs text-wood-600">Cualquier jugador del mundo</div>
+          </button>
+          <button
+            type="button"
+            onClick={() => setCountryFilter('CO')}
+            className={`text-left p-4 rounded-lg border-2 transition ${
+              countryFilter === 'CO'
+                ? 'border-accent bg-accent/5'
+                : 'border-wood-100 hover:border-wood-200'
+            } ${user?.country !== 'CO' ? 'opacity-50 cursor-not-allowed' : ''}`}
+            disabled={searching || user?.country !== 'CO'}
+            title={user?.country !== 'CO' ? 'Sólo para jugadores de Colombia' : ''}
+          >
+            <div className="text-2xl">🇨🇴</div>
+            <div className="font-medium mt-1">Sólo Colombia</div>
+            <div className="text-xs text-wood-600">
+              Únicamente jugadores colombianos. Si nadie aparece en 8 s, ampliamos a global.
+            </div>
+          </button>
+        </div>
+
+        {error && (
+          <div className="text-sm text-danger bg-danger/10 border border-danger/20 rounded-md px-3 py-2 mb-4">
+            {error}
+          </div>
+        )}
+
+        {!searching ? (
+          <button onClick={findMatch} className="btn-primary w-full">
+            Buscar rival
+          </button>
+        ) : (
+          <div className="space-y-3">
+            <div className="text-center py-6">
+              <div className="inline-block animate-pulse">
+                <span className="text-3xl">♟️</span>
+              </div>
+              <p className="text-wood-700 mt-2">{statusMsg}</p>
+              {expanded && (
+                <p className="text-xs text-accent mt-1">
+                  Pool ampliado a global automáticamente.
+                </p>
+              )}
+            </div>
+            <button onClick={cancelSearch} className="btn-ghost w-full">
+              Cancelar
+            </button>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+export default function LobbyPage() {
+  return (
+    <AuthGuard>
+      <LobbyInner />
+    </AuthGuard>
+  );
+}

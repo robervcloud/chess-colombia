@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html, body {
+  background-color: theme('colors.parch');
+  color: theme('colors.ink');
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-md font-medium
+           transition-all duration-150 select-none disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white hover:bg-accent-dark shadow-soft;
+  }
+  .btn-ghost {
+    @apply btn bg-transparent border border-wood-200 text-ink hover:bg-wood-50;
+  }
+  .btn-danger {
+    @apply btn bg-danger text-white hover:opacity-90;
+  }
+  .input {
+    @apply w-full px-4 py-2.5 rounded-md border border-wood-200 bg-white
+           focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20
+           transition-colors placeholder:text-wood-400/70;
+  }
+  .card {
+    @apply bg-white rounded-xl border border-wood-100 shadow-soft;
+  }
+  .label {
+    @apply text-sm font-medium text-wood-800/90 mb-1.5 block;
+  }
+
+  .surface-warm {
+    background-color: theme('colors.parch');
+    background-image:
+      radial-gradient(120% 80% at 0% 0%,   rgba(201,162,74,0.10), transparent 60%),
+      radial-gradient(120% 80% at 100% 100%, rgba(110,74,38,0.10), transparent 60%);
+  }
+  .divider-gold {
+    height: 1px;
+    background: linear-gradient(to right, transparent, theme('colors.gold.DEFAULT') 50%, transparent);
+    opacity: 0.55;
+  }
+  .card-premium { @apply card transition-all duration-200; }
+  .card-premium:hover { @apply shadow-glow border-gold/40; }
+  .hover-lift { @apply transition-transform duration-150 will-change-transform; }
+  .hover-lift:hover { transform: translateY(-1px); }
+  .loader-dots { @apply inline-flex items-center gap-1.5; }
+  .loader-dots > span { @apply block w-1.5 h-1.5 rounded-full bg-wood-600; animation: clockPulse 1s ease-in-out infinite; }
+  .loader-dots > span:nth-child(2) { animation-delay: 0.15s; }
+  .loader-dots > span:nth-child(3) { animation-delay: 0.30s; }
+  .shimmer-skel {
+    background: linear-gradient(90deg, theme('colors.wood.50') 0%, theme('colors.wood.100') 50%, theme('colors.wood.50') 100%);
+    background-size: 200% 100%;
+    @apply animate-shimmer rounded-md;
+  }
+
+  
+}
