@@ -60,10 +60,18 @@ function parseTimeControlToMs(tc) {
   return parseInt(m[1], 10) * 60_000;
 }
 
+/**
+ * Programa el flag-timer del JUGADOR ACTUAL.
+ * Idempotente: limpia un timer previo si lo hubiera.
+ * Si la partida ya terminó, no hace nada.
+ */
 function scheduleFlagTimer(io, gameId) {
   const state = activeGames.get(gameId);
   if (!state || state.chess.isGameOver()) return;
-  if (state.flagTimer) { clearTimeout(state.flagTimer); state.flagTimer = null; }
+  if (state.flagTimer) {
+    clearTimeout(state.flagTimer);
+    state.flagTimer = null;
+  }
   const turn = state.chess.turn();
   const base = turn === 'w' ? state.whiteMs : state.blackMs;
   const elapsed = Date.now() - (state.lastMoveAt || Date.now());
@@ -81,18 +89,15 @@ function scheduleFlagTimer(io, gameId) {
   }, ms);
 }
 
-
-
-
 function colorOf(state, userId) {
   if (state.white.userId === userId) return 'w';
   if (state.black.userId === userId) return 'b';
   return null;
 }
 
-
-
 function publicState(state) {
+  // Extrapolar el reloj del jugador a mover. Si la partida terminó o no
+  // tenemos lastMoveAt, devolvemos los valores tal cual (estáticos).
   let whiteMs = state.whiteMs ?? 0;
   let blackMs = state.blackMs ?? 0;
   if (!state.chess.isGameOver() && state.lastMoveAt) {
@@ -113,8 +118,6 @@ function publicState(state) {
     isGameOver: state.chess.isGameOver(),
   };
 }
-
-
 
 /**
  * Crea una partida cuando el matchmaking junta a dos jugadores.
@@ -242,7 +245,6 @@ function register(io, socket) {
 
     // El reloj de blancas empezó a contar en startGame; arrancamos su flag-timer
     scheduleFlagTimer(io, gameId);
-
 
     const meSocket = io.sockets.sockets.get(mePlayer.socketId);
     const oppSocket = io.sockets.sockets.get(opponentPlayer.socketId);
@@ -450,6 +452,7 @@ function register(io, socket) {
       }
 
       // ----- FLAG check ANTES de aplicar el movimiento -----
+      // Si el jugador ya gastó su reloj, no aceptamos la jugada y declaramos timeout.
       const moveStartTs = Date.now();
       if (state.lastMoveAt) {
         const elapsedBeforeMove = moveStartTs - state.lastMoveAt;
@@ -487,23 +490,29 @@ function register(io, socket) {
       const fen = state.chess.fen();
       const pgn = state.chess.pgn();
       const moveRecord = {
-        san: move.san, from: move.from, to: move.to,
+        san: move.san,
+        from: move.from,
+        to: move.to,
         promotion: move.promotion || null,
-        fen, ts: moveStartTs,
+        fen,
+        ts: moveStartTs,
       };
 
+      // Persistir (no esperamos a que termine para no bloquear; pero capturamos errores)
       gameService.appendMove(gameId, moveRecord, fen, pgn).catch((err) =>
         console.error('[game:move] persist error:', err)
       );
 
       io.to(`game:${gameId}`).emit('game:move', {
-        gameId, move: moveRecord, fen, pgn,
+        gameId,
+        move: moveRecord,
+        fen,
+        pgn,
         turn: state.chess.turn(),
         whiteMs: state.whiteMs,
         blackMs: state.blackMs,
       });
       ack?.({ ok: true });
-
 
       // ¿Terminó?
       if (state.chess.isGameOver()) {
