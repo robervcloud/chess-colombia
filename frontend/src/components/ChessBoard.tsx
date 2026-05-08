@@ -23,10 +23,6 @@ export default function ChessBoardView({
   onMove,
   boardWidth = 480,
 }: Props) {
-
-
-
-
   function handleDrop(
     sourceSquare: string,
     targetSquare: string,
