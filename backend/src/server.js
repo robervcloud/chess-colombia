@@ -25,3 +25,15 @@ function shutdown(signal) {
 }
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+// ---- Red de seguridad ante errores no manejados ----
+// Mejor crashear limpio y dejar que Render reinicie el servicio
+// que quedarse en estado indefinido sirviendo respuestas raras.
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] uncaughtException:', err);
+  shutdown('UNCAUGHT_EXCEPTION');
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] unhandledRejection:', reason);
+  shutdown('UNHANDLED_REJECTION');
+});

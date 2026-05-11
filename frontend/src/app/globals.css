@@ -37,30 +37,59 @@ html, body {
     @apply text-sm font-medium text-wood-800/90 mb-1.5 block;
   }
 
+  /* ---- Capa premium: aplicables sin tocar lógica ---- */
+
+  /* Fondo cálido tipo papel/madera. Aplicar al <body> o secciones grandes. */
   .surface-warm {
     background-color: theme('colors.parch');
     background-image:
       radial-gradient(120% 80% at 0% 0%,   rgba(201,162,74,0.10), transparent 60%),
       radial-gradient(120% 80% at 100% 100%, rgba(110,74,38,0.10), transparent 60%);
   }
+
+  /* Línea decorativa con halo dorado central */
   .divider-gold {
     height: 1px;
-    background: linear-gradient(to right, transparent, theme('colors.gold.DEFAULT') 50%, transparent);
+    background: linear-gradient(to right,
+      transparent,
+      theme('colors.gold.DEFAULT') 50%,
+      transparent);
     opacity: 0.55;
   }
-  .card-premium { @apply card transition-all duration-200; }
-  .card-premium:hover { @apply shadow-glow border-gold/40; }
-  .hover-lift { @apply transition-transform duration-150 will-change-transform; }
+
+  /* Card variante: borde fino + halo dorado al hover */
+  .card-premium {
+    @apply card transition-all duration-200;
+  }
+  .card-premium:hover {
+    @apply shadow-glow border-gold/40;
+  }
+
+  /* Hover lift sutil para tarjetas/botones (premium) */
+  .hover-lift {
+    @apply transition-transform duration-150 will-change-transform;
+  }
   .hover-lift:hover { transform: translateY(-1px); }
-  .loader-dots { @apply inline-flex items-center gap-1.5; }
-  .loader-dots > span { @apply block w-1.5 h-1.5 rounded-full bg-wood-600; animation: clockPulse 1s ease-in-out infinite; }
+
+  /* Loader profesional (3 puntos cálidos) */
+  .loader-dots {
+    @apply inline-flex items-center gap-1.5;
+  }
+  .loader-dots > span {
+    @apply block w-1.5 h-1.5 rounded-full bg-wood-600;
+    animation: clockPulse 1s ease-in-out infinite;
+  }
   .loader-dots > span:nth-child(2) { animation-delay: 0.15s; }
   .loader-dots > span:nth-child(3) { animation-delay: 0.30s; }
+
+  /* Skeleton/shimmer para placeholders mientras carga */
   .shimmer-skel {
-    background: linear-gradient(90deg, theme('colors.wood.50') 0%, theme('colors.wood.100') 50%, theme('colors.wood.50') 100%);
+    background:
+      linear-gradient(90deg,
+        theme('colors.wood.50')  0%,
+        theme('colors.wood.100') 50%,
+        theme('colors.wood.50')  100%);
     background-size: 200% 100%;
     @apply animate-shimmer rounded-md;
   }
-
-  
 }

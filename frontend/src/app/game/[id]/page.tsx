@@ -29,7 +29,9 @@ function GameInner() {
     endResult,
     opponentDisconnected,
     errorMsg,
-    whiteMs, blackMs, clockBaseAt,
+    whiteMs,
+    blackMs,
+    clockBaseAt,
     makeMove,
     resign,
   } = useGame(gameId);
@@ -86,7 +88,7 @@ function GameInner() {
             color={myColor === 'w' ? 'b' : 'w'}
             isTurn={!isMyTurn && !endResult}
             disconnected={opponentDisconnected}
-            baseMs={myColor === 'w' ? blackMs : whiteMs}    /* rival */
+            baseMs={myColor === 'w' ? blackMs : whiteMs}
             baseAt={clockBaseAt}
             frozen={!!endResult}
           />
@@ -107,7 +109,7 @@ function GameInner() {
             color={myColor || 'w'}
             isTurn={isMyTurn}
             disconnected={false}
-            baseMs={myColor === 'w' ? whiteMs : blackMs}    /* yo */
+            baseMs={myColor === 'w' ? whiteMs : blackMs}
             baseAt={clockBaseAt}
             frozen={!!endResult}
           />
@@ -154,9 +156,20 @@ function GameInner() {
               Rendirse
             </button>
           ) : (
-            <button className="btn-primary w-full" onClick={() => router.push('/lobby')}>
-              Volver al lobby
-            </button>
+            <div className="space-y-2">
+              <button
+                className="btn-primary w-full"
+                onClick={() => router.push(`/game/${gameId}/analysis`)}
+              >
+                Ver análisis de la partida
+              </button>
+              <button
+                className="btn-ghost w-full"
+                onClick={() => router.push('/lobby')}
+              >
+                Volver al lobby
+              </button>
+            </div>
           )}
 
           {pgn && (
@@ -173,13 +186,22 @@ function GameInner() {
   );
 }
 
-
 function PlayerBar({
-  name, color, isTurn, disconnected, baseMs, baseAt, frozen,
+  name,
+  color,
+  isTurn,
+  disconnected,
+  baseMs,
+  baseAt,
+  frozen,
 }: {
-  name: string; color: 'w' | 'b';
-  isTurn: boolean; disconnected: boolean;
-  baseMs: number; baseAt: number; frozen: boolean;
+  name: string;
+  color: 'w' | 'b';
+  isTurn: boolean;
+  disconnected: boolean;
+  baseMs: number;
+  baseAt: number;
+  frozen: boolean;
 }) {
   return (
     <div
@@ -196,14 +218,14 @@ function PlayerBar({
           {color === 'w' ? '♔' : '♚'}
         </span>
         <span className="font-medium truncate">{name}</span>
-        {disconnected && <span className="text-xs opacity-80">(desconectado)</span>}
+        {disconnected && (
+          <span className="text-xs opacity-80">(desconectado)</span>
+        )}
       </div>
       <Clock baseMs={baseMs} baseAt={baseAt} active={isTurn} frozen={frozen} />
     </div>
   );
 }
-
-
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (

@@ -15,6 +15,10 @@ const { apiLimiter } = require('./middleware/rateLimiter');
 
 const app = express();
 
+// Detrás del proxy de Render: confiar en 1 nivel para que req.ip
+// devuelva la IP real del cliente (necesario para rate limiting).
+app.set('trust proxy', 1);
+
 app.use(helmet());
 app.use(
   cors({

@@ -23,8 +23,11 @@ interface UseGameResult {
   endResult: GameEndPayload | null;
   opponentDisconnected: boolean;
   errorMsg: string | null;
+  /** Reloj — ms restantes según el último snapshot del server */
   whiteMs: number;
   blackMs: number;
+  /** Timestamp local (Date.now()) del cliente cuando recibimos el snapshot.
+   *  Sirve de ancla para extrapolar el tic en pantalla. */
   clockBaseAt: number;
   /** Intenta jugar. Devuelve true si el server lo aceptó. */
   makeMove: (from: string, to: string, promotion?: string) => Promise<boolean>;
@@ -57,6 +60,7 @@ export function useGame(gameId: string): UseGameResult {
   const [ready, setReady] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // ----- Reloj -----
   const [whiteMs, setWhiteMs] = useState<number>(0);
   const [blackMs, setBlackMs] = useState<number>(0);
   const [clockBaseAt, setClockBaseAt] = useState<number>(0);
@@ -80,9 +84,11 @@ export function useGame(gameId: string): UseGameResult {
       setWhite(p.white);
       setBlack(p.black);
       setMyColor(p.color);
+      // ---- Reloj ----
       if (typeof p.whiteMs === 'number') setWhiteMs(p.whiteMs);
       if (typeof p.blackMs === 'number') setBlackMs(p.blackMs);
       setClockBaseAt(Date.now());
+      // ---------------
       setReady(true);
       setNotFound(false);
       setOpponentDisconnected(false);
@@ -94,7 +100,8 @@ export function useGame(gameId: string): UseGameResult {
       fen: string;
       pgn: string;
       turn: Color;
-      whiteMs?: number; blackMs?: number;
+      whiteMs?: number;
+      blackMs?: number;
     }) {
       if (cancelled || payload.gameId !== gameId) return;
       try {
@@ -107,7 +114,7 @@ export function useGame(gameId: string): UseGameResult {
       setTurn(payload.turn);
       if (typeof payload.whiteMs === 'number') setWhiteMs(payload.whiteMs);
       if (typeof payload.blackMs === 'number') setBlackMs(payload.blackMs);
-      setClockBaseAt(Date.now());  
+      setClockBaseAt(Date.now());
     }
 
     function onEnd(payload: GameEndPayload) {
@@ -119,6 +126,7 @@ export function useGame(gameId: string): UseGameResult {
       setEndResult(payload);
       setFen(payload.fen);
       setPgn(payload.pgn);
+      // Congelar reloj con los valores finales del server
       if (typeof payload.whiteMs === 'number') setWhiteMs(payload.whiteMs);
       if (typeof payload.blackMs === 'number') setBlackMs(payload.blackMs);
       setClockBaseAt(Date.now());
@@ -247,10 +255,10 @@ export function useGame(gameId: string): UseGameResult {
     endResult,
     opponentDisconnected,
     errorMsg,
-    makeMove,
-    resign,
     whiteMs,
     blackMs,
     clockBaseAt,
+    makeMove,
+    resign,
   };
 }

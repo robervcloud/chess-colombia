@@ -1,0 +1,68 @@
+# =====================================================================
+# Render Blueprint — chess-colombia
+# =====================================================================
+# Permite desplegar backend + worker con un solo "Apply" en Render
+# (Dashboard → New → Blueprint → conectar este repo).
+#
+# El frontend se despliega aparte en Vercel (no se gestiona aquí).
+#
+# Variables marcadas con `sync: false` deben configurarse manualmente
+# en el dashboard tras el primer apply (Render no expone secretos en el blueprint).
+# =====================================================================
+
+services:
+  # -------------------------------------------------------------------
+  # Backend — API REST + Socket.io
+  # -------------------------------------------------------------------
+  - type: web
+    name: chess-colombia-backend
+    runtime: node
+    plan: free                 # 750h/mes; suficiente para arrancar
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: SUPABASE_URL
+        sync: false             # <- pegar manualmente
+      - key: SUPABASE_SERVICE_KEY
+        sync: false             # <- pegar manualmente
+      - key: JWT_SECRET
+        generateValue: true     # Render lo genera la primera vez
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: CLIENT_ORIGIN
+        sync: false             # <- URL de Vercel sin slash final
+      - key: GOOGLE_CLIENT_ID
+        sync: false             # opcional; vacío deshabilita Google login
+
+  # -------------------------------------------------------------------
+  # Worker — Stockfish + análisis post-partida
+  # -------------------------------------------------------------------
+  - type: worker
+    name: chess-colombia-analysis
+    runtime: docker
+    plan: starter               # el free de worker es de poca RAM; starter va mejor con stockfish
+    rootDir: worker
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: STOCKFISH_PATH
+        value: /usr/games/stockfish
+      - key: ENGINE_DEPTH
+        value: "12"
+      - key: ENGINE_MULTIPV
+        value: "3"
+      - key: POLL_INTERVAL_MS
+        value: "4000"
+      - key: MAX_PLIES
+        value: "200"

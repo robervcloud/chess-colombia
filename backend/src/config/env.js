@@ -16,6 +16,23 @@ if (missing.length > 0) {
   );
 }
 
+// ---- Validación dura de JWT_SECRET en producción ----
+// En dev permitimos el default para que `npm run dev` arranque sin .env.
+// En producción es un fallo de seguridad: cualquiera podría forjar tokens.
+const nodeEnv = process.env.NODE_ENV || 'development';
+if (nodeEnv === 'production') {
+  const s = process.env.JWT_SECRET;
+  if (!s || s === 'dev-secret-change-me' || s.length < 32) {
+    console.error(
+      '\n[FATAL] JWT_SECRET no está configurado o es inseguro en producción.\n' +
+      '        Define una env var JWT_SECRET de al menos 32 caracteres.\n' +
+      '        Generar uno seguro:\n' +
+      '          node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"\n'
+    );
+    process.exit(1);
+  }
+}
+
 module.exports = {
   port: parseInt(process.env.PORT || '4000', 10),
   nodeEnv: process.env.NODE_ENV || 'development',

@@ -7,8 +7,6 @@ module.exports = {
         // Paleta inspirada en madera de tablero + acento esmeralda
         ink:    '#1a1612',
         parch:  '#f5efe6',
-        gold: { DEFAULT: '#c9a24a', light: '#e8c873', dark: '#9a7732' },
-        clay: { DEFAULT: '#c25a3a', light: '#d97a5a', dark: '#8e3f26' },
         wood: {
           50:  '#f8f1e3',
           100: '#ecdfc1',
@@ -22,6 +20,18 @@ module.exports = {
           light:   '#2da97f',
           dark:    '#0f4f3a',
         },
+        // Acento cálido (dorado tabaco) para detalles premium
+        gold: {
+          DEFAULT: '#c9a24a',
+          light:   '#e8c873',
+          dark:    '#9a7732',
+        },
+        // Rojo cálido (terracota) para low-time y estados de presión
+        clay: {
+          DEFAULT: '#c25a3a',
+          light:   '#d97a5a',
+          dark:    '#8e3f26',
+        },
         danger: '#b3392c',
       },
       fontFamily: {
@@ -33,9 +43,18 @@ module.exports = {
         glow: '0 0 0 1px rgba(201,162,74,0.35), 0 8px 24px -10px rgba(201,162,74,0.35)',
       },
       keyframes: {
-        clockPulse: { '0%, 100%': { opacity: '1' }, '50%': { opacity: '0.55' } },
-        breath:     { '0%, 100%': { transform: 'scale(1)' }, '50%': { transform: 'scale(1.015)' } },
-        shimmer:    { '0%': { backgroundPosition: '-200% 0' }, '100%': { backgroundPosition: '200% 0' } },
+        clockPulse: {
+          '0%, 100%': { opacity: '1' },
+          '50%':      { opacity: '0.55' },
+        },
+        breath: {
+          '0%, 100%': { transform: 'scale(1)' },
+          '50%':      { transform: 'scale(1.015)' },
+        },
+        shimmer: {
+          '0%':   { backgroundPosition: '-200% 0' },
+          '100%': { backgroundPosition: '200% 0' },
+        },
       },
       animation: {
         'clock-pulse': 'clockPulse 1.1s ease-in-out infinite',
@@ -46,5 +65,3 @@ module.exports = {
   },
   plugins: [],
 };
-
-
