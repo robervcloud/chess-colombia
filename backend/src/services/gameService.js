@@ -89,12 +89,19 @@ async function finishGame(gameId, { result, termination, fen, pgn }) {
     throw { status: 500, message: 'No se pudo finalizar la partida' };
   }
 
+
+
   // Encolar análisis post-partida (no-bloqueante).
   // Si falla la inserción (p.ej. la tabla no existe porque no se corrió la
   // migración 002, o ya existe el row), NO afectamos el resultado del juego.
   enqueueAnalysis(gameId).catch((err) => {
-    console.warn('[gameService.finishGame] no se pudo encolar análisis:', err.message);
+    console.error('[gameService.finishGame] FALLA al encolar análisis:', {
+      gameId,
+      message: err.message,
+      code: err.code,
+    });
   });
+
 }
 
 /**
