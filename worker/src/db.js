@@ -24,8 +24,6 @@ const supabase = createClient(
   }
 );
 
-
-
 /**
  * Reclama UN análisis pendiente (pasa de 'pending' a 'running').
  * Atómico vía RPC `claim_pending_analysis` (FOR UPDATE SKIP LOCKED).

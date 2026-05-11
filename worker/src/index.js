@@ -14,6 +14,7 @@
  */
 require('dotenv').config();
 
+const http = require('http');
 const { StockfishEngine } = require('./engine');
 const { analyzeGame } = require('./analyzer');
 const db = require('./db');
@@ -24,6 +25,20 @@ const ENGINE_DEPTH = parseInt(process.env.ENGINE_DEPTH || '12', 10);
 let engine = null;
 let stopping = false;
 let currentJobId = null; // P1-6: para marcar failed en SIGTERM si hay job en progreso
+
+// Render Free Web Service necesita un puerto abierto.
+// Este mini servidor HTTP mantiene vivo el worker.
+const PORT = process.env.PORT || 10000;
+
+http
+  .createServer((req, res) => {
+    res.writeHead(200);
+    res.end('Worker alive');
+  })
+  .listen(PORT, () => {
+    console.log(`[worker] Health server on port ${PORT}`);
+  });
+
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
