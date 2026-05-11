@@ -3,16 +3,28 @@
  * Usa la SERVICE_KEY de Supabase (mismas credenciales que el backend).
  */
 const { createClient } = require('@supabase/supabase-js');
+const WebSocket = require('ws');
 
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
   console.error('[worker.db] Faltan SUPABASE_URL / SUPABASE_SERVICE_KEY');
 }
 
+
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY,
-  { auth: { persistSession: false, autoRefreshToken: false } }
+  {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+    realtime: {
+      transport: WebSocket,
+    },
+  }
 );
+
+
 
 /**
  * Reclama UN análisis pendiente (pasa de 'pending' a 'running').
