@@ -89,19 +89,12 @@ async function finishGame(gameId, { result, termination, fen, pgn }) {
     throw { status: 500, message: 'No se pudo finalizar la partida' };
   }
 
-
-
   // Encolar análisis post-partida (no-bloqueante).
   // Si falla la inserción (p.ej. la tabla no existe porque no se corrió la
   // migración 002, o ya existe el row), NO afectamos el resultado del juego.
   enqueueAnalysis(gameId).catch((err) => {
-    console.error('[gameService.finishGame] FALLA al encolar análisis:', {
-      gameId,
-      message: err.message,
-      code: err.code,
-    });
+    console.warn('[gameService.finishGame] no se pudo encolar análisis:', err.message);
   });
-
 }
 
 /**
@@ -116,6 +109,33 @@ async function enqueueAnalysis(gameId) {
     if (error.code === '23505') return; // ya existe (idempotente)
     throw new Error(error.message || 'No se pudo encolar análisis');
   }
+  console.log(`[gameService] análisis encolado: ${gameId}`);
+  // Despertar al worker si está hibernado (Render Free Web Service
+  // hiberna tras 15 min sin tráfico HTTP externo).
+  pingWorker();
+}
+
+/**
+ * Fire-and-forget: pega al worker para sacarlo de hibernación en Render.
+ * No esperamos respuesta (cold start puede tardar 30s); basta con que
+ * la conexión TCP llegue para que Render registre actividad y despierte.
+ * Si WORKER_URL no está configurado, no-op (compatibilidad dev/local).
+ */
+function pingWorker() {
+  const url = process.env.WORKER_URL;
+  if (!url) return;
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 5000);
+  fetch(url, { method: 'HEAD', signal: ctl.signal })
+    .then(() => console.log('[gameService] worker pinged'))
+    .catch((err) => {
+      // No es error real: cold start del worker corta la conexión.
+      // Lo importante es que Render ya registró el tráfico.
+      if (err.name !== 'AbortError') {
+        console.log('[gameService] worker ping (esperado):', err.message);
+      }
+    })
+    .finally(() => clearTimeout(t));
 }
 
 /**
