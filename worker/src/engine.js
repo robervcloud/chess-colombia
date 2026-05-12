@@ -15,7 +15,7 @@ const { Chess } = require('chess.js');
 class StockfishEngine {
   constructor(opts = {}) {
     this.path = opts.path || process.env.STOCKFISH_PATH || 'stockfish';
-    this.depth = opts.depth || parseInt(process.env.ENGINE_DEPTH || '12', 10);
+    this.depth = opts.depth || parseInt(process.env.ENGINE_DEPTH || '15', 10);
     this.multipv = opts.multipv || parseInt(process.env.ENGINE_MULTIPV || '3', 10);
     this.proc = null;
     this.buffer = '';
@@ -129,6 +129,53 @@ class StockfishEngine {
     const job = this.queue.then(() => this._analyzeOne(fen, depth));
     this.queue = job.catch(() => {}); // si falla, no rompemos la cadena
     return job;
+  }
+
+  /**
+   * Pide la mejor jugada para una posición, con `Skill Level` (0-20)
+   * de Stockfish para simular fuerza humana. Usado por los bots.
+   * Devuelve un UCI string (ej. 'e2e4', 'e7e8q').
+   */
+  async bestMove({ fen, skill = 10, depth = 8, moveTimeMs = 0 } = {}) {
+    const job = this.queue.then(() => this._bestMoveOne(fen, skill, depth, moveTimeMs));
+    this.queue = job.catch(() => {});
+    return job;
+  }
+
+  _bestMoveOne(fen, skill, depth, moveTimeMs) {
+    if (!this.alive) return Promise.reject(new Error('Engine no vivo'));
+    return new Promise((resolve, reject) => {
+      const tid = setTimeout(() => {
+        this.listeners = this.listeners.filter((l) => l._tid !== tid);
+        reject(new Error('bestMove timeout'));
+      }, 30_000);
+
+      this.listeners.push({
+        _tid: tid,
+        match: (line) => line.startsWith('bestmove '),
+        resolve: (bestmoveLine) => {
+          clearTimeout(tid);
+          const parts = bestmoveLine.split(/\s+/);
+          const uci = parts[1];
+          if (!uci || uci === '(none)') return reject(new Error('sin jugada'));
+          resolve(uci);
+        },
+        reject,
+      });
+
+      try {
+        // Skill Level: 0 (peor) … 20 (mejor)
+        const s = Math.max(0, Math.min(20, skill | 0));
+        this._send(`setoption name Skill Level value ${s}`);
+        this._send('ucinewgame');
+        this._send(`position fen ${fen}`);
+        if (moveTimeMs > 0) this._send(`go movetime ${moveTimeMs}`);
+        else                this._send(`go depth ${depth}`);
+      } catch (err) {
+        clearTimeout(tid);
+        reject(err);
+      }
+    });
   }
 
   _analyzeOne(fen, depth) {

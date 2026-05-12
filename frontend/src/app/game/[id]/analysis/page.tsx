@@ -87,6 +87,39 @@ function AnalysisInner() {
     };
   }, [gameId]);
 
+  // ---- Análisis temporal: borrar al salir de la página ----
+  // Doble vía: (1) DELETE async al desmontar React, (2) sendBeacon
+  // si el usuario cierra/recarga la pestaña. El TTL del worker es la
+  // red de seguridad si algo falla.
+  useEffect(() => {
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
+    const token = typeof window !== 'undefined' ? localStorage.getItem('chess_co_token') : null;
+    const url = `${apiBase}/api/games/${gameId}/analysis`;
+
+    function beforeUnload() {
+      if (!token) return;
+      // sendBeacon no permite headers; usamos fetch keepalive con DELETE
+      try {
+        fetch(url, {
+          method: 'DELETE',
+          keepalive: true,
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch(() => {});
+      } catch { /* noop */ }
+    }
+    window.addEventListener('beforeunload', beforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', beforeUnload);
+      // Desmontaje normal (navegación SPA): DELETE async, sin esperar
+      if (token) {
+        fetch(url, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch(() => {});
+      }
+    };
+  }, [gameId]);
+
   const moves: MoveAnalysis[] = data?.analysis?.moves_analysis || [];
   const totalPlies = moves.length;
 
@@ -178,37 +211,22 @@ function AnalysisInner() {
 
   const status = data.analysis?.status;
 
-
-
-
-  
   if (!data.analysis || status === 'pending' || status === 'running') {
-    const slowMode = !data.analysis || status === 'pending';
     return (
       <Centered>
         <div className="card-premium p-8 max-w-md text-center">
-          <h2 className="font-display text-3xl mb-2">
-            {status === 'running' ? 'Analizando tu partida' : 'En cola'}
-          </h2>
+          <h2 className="font-display text-3xl mb-2">Analizando tu partida</h2>
           <p className="text-wood-600 mb-6">
-            {status === 'running'
-              ? 'Stockfish está revisando cada jugada. Esto suele tardar entre 10 y 30 segundos.'
-              : 'Tu partida está esperando turno con el motor de análisis.'}
+            Stockfish está revisando cada jugada. Esto suele tardar entre 10 y 30 segundos.
           </p>
           <span className="loader-dots mb-2"><span /><span /><span /></span>
           <p className="text-xs text-wood-500 mt-4">
-            {slowMode 
-              ? 'Si tarda más de 1 minuto, recarga la página.'
-              : 'La página se actualiza sola cuando termine.'}
+            La página se actualiza sola cuando el análisis termine.
           </p>
         </div>
       </Centered>
     );
   }
-
-
-
-
 
   if (status === 'failed') {
     return (

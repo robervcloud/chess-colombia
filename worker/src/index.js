@@ -27,17 +27,45 @@ let stopping = false;
 let currentJobId = null; // P1-6: para marcar failed en SIGTERM si hay job en progreso
 
 // Render Free Web Service necesita un puerto abierto.
-// Este mini servidor HTTP mantiene vivo el worker.
+// También sirve el endpoint /bot-move para jugadas de bots.
 const PORT = process.env.PORT || 10000;
+const BOT_AUTH_TOKEN = process.env.BOT_AUTH_TOKEN || '';
 
 http
-  .createServer((req, res) => {
+  .createServer(async (req, res) => {
+    // POST /bot-move  body: { fen, skill, depth, moveTimeMs }
+    if (req.method === 'POST' && req.url === '/bot-move') {
+      // Auth simple compartido backend↔worker
+      if (BOT_AUTH_TOKEN && req.headers['x-bot-token'] !== BOT_AUTH_TOKEN) {
+        res.writeHead(401); return res.end('unauthorized');
+      }
+      try {
+        const body = await readBody(req);
+        const { fen, skill = 10, depth = 8, moveTimeMs = 0 } = JSON.parse(body);
+        const e = await ensureEngine();
+        const move = await e.bestMove({ fen, skill, depth, moveTimeMs });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ uci: move }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: err.message }));
+      }
+    }
     res.writeHead(200);
     res.end('Worker alive');
   })
   .listen(PORT, () => {
-    console.log(`[worker] Health server on port ${PORT}`);
+    console.log(`[worker] Health/Bot server on port ${PORT}`);
   });
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (c) => { data += c; if (data.length > 1e5) reject(new Error('body too big')); });
+    req.on('end', () => resolve(data));
+    req.on('error', reject);
+  });
+}
 
 
 function sleep(ms) {
@@ -100,7 +128,19 @@ async function processOne(job) {
 }
 
 async function loop() {
+  let lastPurgeAt = 0;
+  const PURGE_INTERVAL_MS = 5 * 60 * 1000;
   while (!stopping) {
+    // TTL cleanup periódico (cada 5 min)
+    if (Date.now() - lastPurgeAt > PURGE_INTERVAL_MS) {
+      lastPurgeAt = Date.now();
+      try {
+        const n = await db.purgeOldAnalyses();
+        if (n > 0) console.log(`[worker] TTL: borrados ${n} análisis viejos`);
+      } catch (err) {
+        console.warn('[worker] purge falló:', err.message);
+      }
+    }
     let job = null;
     try {
       job = await db.claimNextPending();

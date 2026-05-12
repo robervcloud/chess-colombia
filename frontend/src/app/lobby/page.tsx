@@ -3,8 +3,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import AuthGuard from '@/components/AuthGuard';
+import BotPicker from '@/components/BotPicker';
 import { getSocket } from '@/lib/socket';
 import { useAuth } from '@/lib/auth';
+import { api } from '@/lib/api';
 
 // Debe coincidir con ALLOWED_TIME_CONTROLS del backend
 const TIME_CONTROLS: Array<{ value: string; label: string; sub: string }> = [
@@ -23,6 +25,11 @@ function LobbyInner() {
   const [error, setError] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string>('');
   const [expanded, setExpanded] = useState<boolean>(false); // si saltó CO->GLOBAL
+  const [botCreating, setBotCreating] = useState<string | null>(null);
+  // Vista del panel: 'match' = matchmaking, 'bots' = grid de bots inline.
+  const [view, setView] = useState<'match' | 'bots'>('match');
+  // Indica si entramos a 'bots' por timeout (cambia el copy del intro).
+  const [fromTimeout, setFromTimeout] = useState(false);
 
   // Necesitamos el valor "vivo" en el cleanup, sin re-suscribir el effect
   const searchingRef = useRef(searching);
@@ -42,11 +49,13 @@ function LobbyInner() {
       setExpanded(true);
       setStatusMsg('Buscamos en Colombia y no apareció nadie. Ampliando a global…');
     }
-    function onMatchTimeout(payload: { message?: string }) {
+    function onMatchTimeout(_payload: { message?: string }) {
       setSearching(false);
       setExpanded(false);
       setStatusMsg('');
-      setError(payload?.message || 'No encontramos rival. Intenta de nuevo.');
+      // Fallback elegante: pasamos a la vista de bots con un copy cálido.
+      setFromTimeout(true);
+      setView('bots');
     }
     function onConnectError(err: Error) {
       setError(`No se pudo conectar al servidor: ${err.message}`);
@@ -99,6 +108,22 @@ function LobbyInner() {
       setExpanded(false);
       setStatusMsg('');
     });
+  }
+
+  async function pickBot(botId: string) {
+    setBotCreating(botId);
+    setError(null);
+    try {
+      const r = await api<{ gameId: string }>('/api/games/bot', {
+        method: 'POST',
+        body: JSON.stringify({ botId, timeControl, color: 'random' }),
+      });
+      router.push(`/game/${r.gameId}`);
+    } catch (e: any) {
+      setError(e?.message || 'No se pudo crear la partida vs bot');
+    } finally {
+      setBotCreating(null);
+    }
   }
 
   return (
@@ -176,12 +201,22 @@ function LobbyInner() {
           </div>
         )}
 
-        {!searching ? (
-          <button onClick={findMatch} className="btn-primary w-full">
-            Buscar rival
-          </button>
-        ) : (
-          <div className="space-y-3">
+        {view === 'match' && !searching && (
+          <div className="space-y-3 animate-fadeIn">
+            <button onClick={findMatch} className="btn-primary w-full">
+              Jugar online
+            </button>
+            <button
+              onClick={() => { setFromTimeout(false); setView('bots'); }}
+              className="btn-ghost w-full"
+            >
+              Jugar contra bots
+            </button>
+          </div>
+        )}
+
+        {view === 'match' && searching && (
+          <div className="space-y-3 animate-fadeIn">
             <div className="text-center py-6">
               <div className="inline-block animate-pulse">
                 <span className="text-3xl">♟️</span>
@@ -196,6 +231,46 @@ function LobbyInner() {
             <button onClick={cancelSearch} className="btn-ghost w-full">
               Cancelar
             </button>
+          </div>
+        )}
+
+        {view === 'bots' && (
+          <div className="animate-fadeIn">
+            <div className="flex items-center justify-between mb-4">
+              <button
+                onClick={() => { setView('match'); setFromTimeout(false); }}
+                className="text-sm text-wood-600 hover:text-ink transition-colors inline-flex items-center gap-1"
+              >
+                <span aria-hidden>←</span> Volver
+              </button>
+              {!fromTimeout && (
+                <p className="text-xs uppercase tracking-[0.18em] text-wood-500">
+                  Bots colombianos
+                </p>
+              )}
+            </div>
+
+            <BotPicker
+              variant="inline"
+              timeControl={timeControl}
+              onTimeControlChange={setTimeControl}
+              onPick={pickBot}
+              loading={!!botCreating}
+              picked={botCreating}
+              intro={
+                fromTimeout ? (
+                  <div className="rounded-md border border-wood-100 bg-wood-50/60 px-4 py-3">
+                    <p className="font-display text-base text-ink">
+                      Por ahora no hay rivales humanos disponibles.
+                    </p>
+                    <p className="text-sm text-wood-600 mt-1">
+                      Mientras tanto, puedes seguir jugando contra uno de nuestros
+                      bots colombianos. Mismas reglas, mismo análisis al terminar.
+                    </p>
+                  </div>
+                ) : null
+              }
+            />
           </div>
         )}
       </div>

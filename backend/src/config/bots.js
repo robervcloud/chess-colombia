@@ -1,16 +1,16 @@
 /**
  * Catálogo central de bots con identidad colombiana sutil.
  *
- * Cada bot mapea a (skill, depth, moveTime) de Stockfish:
- *   - skill: 0..20  (Skill Level UCI)
- *   - depth: profundidad máx. de búsqueda
- *   - moveTimeMs: si > 0, override de depth por tiempo
+ * Stockfish UCI mapping:
+ *   - skill (0..20)
+ *   - depth (profundidad máx.)
+ *   - moveTimeMs (si > 0, override de depth por tiempo)
  *
- * `delayMs`: pausa artificial antes de mover, para sentir humano.
- * `eloApprox`: Elo nominal mostrado al usuario.
+ * Para el frontend (publicBot):
+ *   - playStyle: etiqueta corta visible
+ *   - gradient: [from, to] hex, alimenta el avatar/card visual
  *
- * Para agregar un bot nuevo: copiar una entrada, cambiar id/nombre.
- * Nada más necesita cambiar.
+ * Para añadir un bot: copiar un objeto y cambiar id/name. Listo.
  */
 
 const BOTS = [
@@ -22,57 +22,67 @@ const BOTS = [
     depth: 3,
     moveTimeMs: 0,
     delayMs: 900,
-    avatar: '☕',
-    description: 'Café cargado, jugadas rápidas, errores tácticos.',
+    avatar: '🦅',
+    description: 'Comete errores frecuentes, pero castiga piezas colgadas.',
+    playStyle: 'Impulsiva',
     personality: 'impulsive',
+    gradient: ['#c08a5c', '#8a5a32'],
   },
   {
-    id: 'tinto',
-    name: 'Tinto',
+    id: 'tinto-maestro',
+    name: 'Tinto Maestro',
     eloApprox: 1100,
     skill: 5,
     depth: 5,
     moveTimeMs: 0,
     delayMs: 1100,
-    avatar: '🫘',
-    description: 'Directo, sin paciencia. Se acelera al final.',
+    avatar: '☕',
+    description: 'Caliente y directo. Se acelera al final, regala material.',
+    playStyle: 'Agresivo',
     personality: 'aggressive',
+    gradient: ['#7a3b2a', '#4a221a'],
   },
   {
-    id: 'tejo',
-    name: 'Tejo',
+    id: 'paisa-gambit',
+    name: 'Paisa Gambit',
     eloApprox: 1400,
     skill: 8,
     depth: 7,
     moveTimeMs: 0,
     delayMs: 1300,
     avatar: '🎯',
-    description: 'Disfruta los sacrificios. A veces le sale.',
+    description: 'Le gusta el sacrificio. A veces le sale jugada de revista.',
+    playStyle: 'Táctico',
     personality: 'tactical',
+    gradient: ['#d4a23a', '#9a6b1f'],
   },
   {
-    id: 'cumbia',
-    name: 'Cumbia',
+    id: 'rey-cafetero',
+    name: 'Rey Cafetero',
     eloApprox: 1700,
     skill: 11,
     depth: 9,
     moveTimeMs: 0,
     delayMs: 1500,
-    avatar: '🪘',
-    description: 'Ritmo y posición. Te lleva al baile sin que te des cuenta.',
+    avatar: '👑',
+    description: 'Cosecha lenta y pareja. Te lleva al endgame y aprieta.',
+    playStyle: 'Posicional',
     personality: 'positional',
+    gradient: ['#9b6a2a', '#5a3d18'],
   },
   {
-    id: 'paramo',
-    name: 'Páramo',
+    id: 'condor-paramo',
+    name: 'Cóndor del Páramo',
     eloApprox: 2000,
     skill: 15,
     depth: 12,
     moveTimeMs: 0,
     delayMs: 1700,
     avatar: '🏔️',
-    description: 'Sólido, paciente, defensivo. Te ahoga sin ruido.',
+    description: 'Sólido y paciente. Te ahoga jugada a jugada sin hacer ruido.',
+    playStyle: 'Defensivo',
     personality: 'defensive',
+    gradient: ['#4a5563', '#1f2530'],
   },
   {
     id: 'el-dorado',
@@ -83,8 +93,10 @@ const BOTS = [
     moveTimeMs: 0,
     delayMs: 1800,
     avatar: '✨',
-    description: 'Estratega profundo. No regala material.',
+    description: 'Estratega profundo. Calcula líneas largas, no regala nada.',
+    playStyle: 'Estratégico',
     personality: 'strategic',
+    gradient: ['#e8c873', '#8a6a1f'],
   },
 ];
 
@@ -93,14 +105,15 @@ function getBot(id) {
 }
 
 function publicBot(b) {
-  // Lo que se manda al cliente (sin parámetros técnicos del motor)
   return {
     id: b.id,
     name: b.name,
     eloApprox: b.eloApprox,
     avatar: b.avatar,
     description: b.description,
+    playStyle: b.playStyle,
     personality: b.personality,
+    gradient: b.gradient,
   };
 }
 

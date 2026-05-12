@@ -67,4 +67,10 @@ async function markFailed(gameId, errorMessage) {
   if (error) console.error('[worker.db.markFailed]', error);
 }
 
-module.exports = { claimNextPending, markDone, markFailed };
+async function purgeOldAnalyses() {
+  const { data, error } = await supabase.rpc('purge_old_analyses');
+  if (error) throw new Error(`RPC purge_old_analyses: ${error.message}`);
+  return data || 0;
+}
+
+module.exports = { claimNextPending, markDone, markFailed, purgeOldAnalyses };

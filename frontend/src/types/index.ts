@@ -1,5 +1,16 @@
 export type Country = 'CO' | string;
 
+export interface Bot {
+  id: string;
+  name: string;
+  eloApprox: number;
+  avatar: string;
+  description: string;
+  playStyle: string;
+  personality: string;
+  gradient: [string, string];
+}
+
 export interface User {
   id: string;
   username: string;
