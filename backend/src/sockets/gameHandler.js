@@ -415,13 +415,17 @@ function register(io, socket) {
       const dbGame = await gameService.getGame(gameId);
       if (dbGame && (dbGame.white_id === user.id || dbGame.black_id === user.id)) {
         if (dbGame.status === 'finished') {
-          socket.emit('game:end', {
-            gameId,
-            result: dbGame.result,
-            termination: dbGame.termination,
-            fen: dbGame.fen,
-            pgn: dbGame.pgn,
-          });
+
+        socket.emit('game:end', {
+          gameId,
+          result: dbGame.result,
+          termination: dbGame.termination,
+          fen: dbGame.fen,
+          pgn: dbGame.pgn,
+          whiteMs: 0,  // no tenemos el clock final persistido; aceptable como degradación
+          blackMs: 0,
+        });
+
           console.log(
             `[GAME:STATE] partida ${gameId} ya terminó, enviado game:end a ${user.username}`
           );

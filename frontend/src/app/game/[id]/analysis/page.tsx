@@ -178,22 +178,37 @@ function AnalysisInner() {
 
   const status = data.analysis?.status;
 
+
+
+
+  
   if (!data.analysis || status === 'pending' || status === 'running') {
+    const slowMode = !data.analysis || status === 'pending';
     return (
       <Centered>
         <div className="card-premium p-8 max-w-md text-center">
-          <h2 className="font-display text-3xl mb-2">Analizando tu partida</h2>
+          <h2 className="font-display text-3xl mb-2">
+            {status === 'running' ? 'Analizando tu partida' : 'En cola'}
+          </h2>
           <p className="text-wood-600 mb-6">
-            Stockfish está revisando cada jugada. Esto suele tardar entre 10 y 30 segundos.
+            {status === 'running'
+              ? 'Stockfish está revisando cada jugada. Esto suele tardar entre 10 y 30 segundos.'
+              : 'Tu partida está esperando turno con el motor de análisis.'}
           </p>
           <span className="loader-dots mb-2"><span /><span /><span /></span>
           <p className="text-xs text-wood-500 mt-4">
-            La página se actualiza sola cuando el análisis termine.
+            {slowMode 
+              ? 'Si tarda más de 1 minuto, recarga la página.'
+              : 'La página se actualiza sola cuando termine.'}
           </p>
         </div>
       </Centered>
     );
   }
+
+
+
+
 
   if (status === 'failed') {
     return (
