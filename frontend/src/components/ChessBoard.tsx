@@ -23,18 +23,32 @@ export default function ChessBoardView({
   onMove,
   boardWidth = 480,
 }: Props) {
-  async function handleDrop(sourceSquare: string, targetSquare: string, piece: string): Promise<boolean> {
+
+  function handleDrop(
+    sourceSquare: string,
+    targetSquare: string,
+    piece: string
+  ): boolean {
     if (!draggable) return false;
 
-    // Detectar promoción: peón llegando a la última fila (8 para blancas, 1 para negras)
+    // Detectar promoción
     const isPawn = piece?.toLowerCase().endsWith('p');
     const targetRank = targetSquare[1];
+
     const isPromotion =
       isPawn && (targetRank === '8' || targetRank === '1');
 
-    const ok = await onMove(sourceSquare, targetSquare, isPromotion ? 'q' : undefined);
-    return ok;
+    onMove(
+      sourceSquare,
+      targetSquare,
+      isPromotion ? 'q' : undefined
+    ).catch((err) => {
+      console.error('[ChessBoard] move error:', err);
+    });
+
+    return true;
   }
+
 
   return (
     <Chessboard
