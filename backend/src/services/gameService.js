@@ -109,33 +109,6 @@ async function enqueueAnalysis(gameId) {
     if (error.code === '23505') return; // ya existe (idempotente)
     throw new Error(error.message || 'No se pudo encolar análisis');
   }
-  console.log(`[gameService] análisis encolado: ${gameId}`);
-  // Despertar al worker si está hibernado (Render Free Web Service
-  // hiberna tras 15 min sin tráfico HTTP externo).
-  pingWorker();
-}
-
-/**
- * Fire-and-forget: pega al worker para sacarlo de hibernación en Render.
- * No esperamos respuesta (cold start puede tardar 30s); basta con que
- * la conexión TCP llegue para que Render registre actividad y despierte.
- * Si WORKER_URL no está configurado, no-op (compatibilidad dev/local).
- */
-function pingWorker() {
-  const url = process.env.WORKER_URL;
-  if (!url) return;
-  const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), 5000);
-  fetch(url, { method: 'HEAD', signal: ctl.signal })
-    .then(() => console.log('[gameService] worker pinged'))
-    .catch((err) => {
-      // No es error real: cold start del worker corta la conexión.
-      // Lo importante es que Render ya registró el tráfico.
-      if (err.name !== 'AbortError') {
-        console.log('[gameService] worker ping (esperado):', err.message);
-      }
-    })
-    .finally(() => clearTimeout(t));
 }
 
 /**
@@ -193,6 +166,21 @@ async function getGame(gameId) {
   return data;
 }
 
+/**
+ * Borra el row de análisis (NO la partida).
+ * Usado por el cleanup temporal al salir de la página.
+ */
+async function deleteAnalysis(gameId) {
+  const { error } = await supabase
+    .from('game_analyses')
+    .delete()
+    .eq('game_id', gameId);
+  if (error) {
+    console.warn('[gameService.deleteAnalysis]', error.message);
+    // No throw: el TTL del worker eventualmente lo limpia.
+  }
+}
+
 module.exports = {
   createGame,
   appendMove,
@@ -201,4 +189,5 @@ module.exports = {
   getGame,
   getAnalysis,
   enqueueAnalysis,
+  deleteAnalysis,
 };

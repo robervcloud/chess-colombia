@@ -14,6 +14,11 @@ const { Chess } = require('chess.js');
 const matchmaking = require('../services/matchmakingService');
 const gameService = require('../services/gameService');
 const { moveSchema, matchmakingSchema } = require('../utils/validators');
+const { getBot } = require('../config/bots');
+const { botBestMove } = require('../services/botService');
+
+// Prefijo de userId virtual para bots (evita colisión con UUIDs reales).
+const BOT_ID_PREFIX = 'bot:';
 
 /**
  * activeGames: Map<gameId, GameState>
@@ -407,6 +412,13 @@ function register(io, socket) {
       console.log(
         `[GAME:STATE] snapshot enviado a ${user.username} (gameId=${gameId}, color=${color})`
       );
+
+      // Si es partida vs bot y le toca al bot, dispararlo
+      if (state.isBotGame) {
+        triggerBotMoveIfNeeded(io, gameId).catch((err) =>
+          console.error('[bot] trigger tras register falló:', err.message)
+        );
+      }
       return ack?.({ ok: true, status: 'active', gameId });
     }
 
@@ -415,17 +427,13 @@ function register(io, socket) {
       const dbGame = await gameService.getGame(gameId);
       if (dbGame && (dbGame.white_id === user.id || dbGame.black_id === user.id)) {
         if (dbGame.status === 'finished') {
-
-        socket.emit('game:end', {
-          gameId,
-          result: dbGame.result,
-          termination: dbGame.termination,
-          fen: dbGame.fen,
-          pgn: dbGame.pgn,
-          whiteMs: 0,  // no tenemos el clock final persistido; aceptable como degradación
-          blackMs: 0,
-        });
-
+          socket.emit('game:end', {
+            gameId,
+            result: dbGame.result,
+            termination: dbGame.termination,
+            fen: dbGame.fen,
+            pgn: dbGame.pgn,
+          });
           console.log(
             `[GAME:STATE] partida ${gameId} ya terminó, enviado game:end a ${user.username}`
           );
@@ -536,6 +544,13 @@ function register(io, socket) {
         }
         await endGame(io, gameId, { winner, termination });
       }
+
+      // Si es partida vs bot y la partida sigue, le toca al bot
+      if (state.isBotGame && !state.chess.isGameOver()) {
+        triggerBotMoveIfNeeded(io, gameId).catch((err) =>
+          console.error('[bot] trigger tras move humano falló:', err.message)
+        );
+      }
     } catch (err) {
       console.error('[game:move]', err);
       ack?.({ ok: false, error: err?.message || 'Error procesando movimiento' });
@@ -581,4 +596,180 @@ function register(io, socket) {
   });
 }
 
-module.exports = { register };
+/* ============================================================
+ * BOTS — partidas humano vs bot
+ * ============================================================
+ * Reusa toda la infra existente (activeGames, endGame, broadcast,
+ * reloj, flag, finishGame, encolado de análisis). La única diferencia:
+ * cuando le toca al bot, el SERVIDOR genera la jugada llamando al worker.
+ */
+
+async function startBotGame({ user, botId, userIsWhite, timeControl }) {
+  const bot = getBot(botId);
+  if (!bot) throw new Error(`Bot desconocido: ${botId}`);
+
+  const human = {
+    userId: user.id,
+    username: user.username,
+    socketId: null,            // se llena cuando el cliente conecta a la room
+    isBot: false,
+  };
+  const botPlayer = {
+    userId: BOT_ID_PREFIX + bot.id,
+    username: bot.name,
+    socketId: null,
+    isBot: true,
+    botConfig: bot,
+  };
+
+  const white = userIsWhite ? human : botPlayer;
+  const black = userIsWhite ? botPlayer : human;
+
+  // Persistimos como cualquier partida; el bot tiene un userId virtual
+  // que NO existe en la tabla users → guardamos NULL en su columna.
+  const dbGame = await gameService.createGame({
+    whiteId:       white.isBot ? null : white.userId,
+    blackId:       black.isBot ? null : black.userId,
+    whiteUsername: white.username,
+    blackUsername: black.username,
+    timeControl,
+    countryFilter: 'GLOBAL',
+  });
+
+  const state = {
+    chess: new Chess(),
+    white: { ...white, connected: true },
+    black: { ...black, connected: true },
+    countryFilter: 'GLOBAL',
+    timeControl,
+    abandonTimer: null,
+    whiteMs: parseTimeControlToMs(timeControl),
+    blackMs: parseTimeControlToMs(timeControl),
+    lastMoveAt: Date.now(),
+    flagTimer: null,
+    isBotGame: true,
+  };
+
+  activeGames.set(dbGame.id, state);
+  userToGame.set(user.id, dbGame.id);
+  return { gameId: dbGame.id };
+}
+
+/**
+ * Si en `gameId` es turno del bot, le pedimos jugada al worker y la
+ * aplicamos como cualquier otro move (mismo flujo de endGame, etc.).
+ * Llamado tras crear la partida (si bot juega blancas) y tras cada
+ * move humano.
+ */
+async function triggerBotMoveIfNeeded(io, gameId) {
+  const state = activeGames.get(gameId);
+  if (!state || !state.isBotGame) return;
+  if (state.chess.isGameOver()) return;
+  const turn = state.chess.turn(); // 'w' | 'b'
+  const side = state[turn === 'w' ? 'white' : 'black'];
+  if (!side.isBot) return;
+
+  const bot = side.botConfig;
+  const fen = state.chess.fen();
+
+  // Pausa "humana" antes de mover (estética + cold start margin)
+  await new Promise((r) => setTimeout(r, bot.delayMs));
+
+  let uci;
+  try {
+    uci = await botBestMove({
+      fen,
+      skill: bot.skill,
+      depth: bot.depth,
+      moveTimeMs: bot.moveTimeMs,
+    });
+  } catch (err) {
+    console.error(`[bot ${bot.id}] no pudo mover:`, err.message);
+    // Si el bot no puede jugar, resignamos por timeout para no congelar
+    await endGame(io, gameId, {
+      winner: turn === 'w' ? 'b' : 'w',
+      termination: 'bot_unavailable',
+    });
+    return;
+  }
+
+  // Releer estado (puede haber cambiado durante el await)
+  const fresh = activeGames.get(gameId);
+  if (!fresh || fresh.chess.isGameOver()) return;
+  if (fresh.chess.turn() !== turn) return; // ya jugó otro? abort
+
+  const from = uci.substring(0, 2);
+  const to   = uci.substring(2, 4);
+  const promotion = uci.length > 4 ? uci.substring(4, 5) : undefined;
+
+  let move;
+  try {
+    move = fresh.chess.move({ from, to, promotion });
+  } catch {
+    move = null;
+  }
+  if (!move) {
+    console.error(`[bot ${bot.id}] devolvió uci ilegal: ${uci} en ${fen}`);
+    await endGame(io, gameId, {
+      winner: turn === 'w' ? 'b' : 'w',
+      termination: 'bot_unavailable',
+    });
+    return;
+  }
+
+  // Tic del reloj (mismo cálculo que en game:move)
+  const now = Date.now();
+  const elapsed = now - fresh.lastMoveAt;
+  if (turn === 'w') fresh.whiteMs = Math.max(0, fresh.whiteMs - elapsed);
+  else              fresh.blackMs = Math.max(0, fresh.blackMs - elapsed);
+  fresh.lastMoveAt = now;
+
+  const fenAfter = fresh.chess.fen();
+  const pgnAfter = fresh.chess.pgn();
+
+  io.to(`game:${gameId}`).emit('game:move', {
+    gameId,
+    move: { from, to, promotion: promotion || null, san: move.san, color: turn },
+    fen: fenAfter,
+    pgn: pgnAfter,
+    turn: fresh.chess.turn(),
+    whiteMs: fresh.whiteMs,
+    blackMs: fresh.blackMs,
+  });
+
+  // Persistencia best-effort (igual que en move humano)
+  gameService.appendMove(gameId, {
+    from, to, promotion: promotion || null, san: move.san, color: turn, ts: now,
+  }, fenAfter, pgnAfter).catch((err) =>
+    console.warn('[bot] appendMove falló:', err.message)
+  );
+
+  // Si la jugada terminó la partida → endGame
+  if (fresh.chess.isGameOver()) {
+    let winner = 'draw';
+    let termination = 'agreement';
+    if (fresh.chess.isCheckmate()) {
+      winner = turn; termination = 'checkmate';
+    } else if (fresh.chess.isStalemate()) {
+      termination = 'stalemate';
+    } else if (fresh.chess.isThreefoldRepetition()) {
+      termination = 'threefold';
+    } else if (fresh.chess.isInsufficientMaterial()) {
+      termination = 'insufficient_material';
+    } else if (fresh.chess.isDraw()) {
+      termination = 'draw';
+    }
+    await endGame(io, gameId, { winner, termination });
+    return;
+  }
+
+  // Re-armar timer de flag con los ms actualizados
+  scheduleFlagTimer(io, gameId);
+
+  // Si el siguiente sigue siendo bot (raro, pero pase) → cadena
+  triggerBotMoveIfNeeded(io, gameId).catch((err) =>
+    console.error('[bot] triggerBotMoveIfNeeded encadenado:', err.message)
+  );
+}
+
+module.exports = { register, startBotGame, triggerBotMoveIfNeeded };
