@@ -36,6 +36,7 @@ function GameInner() {
     resign,
   } = useGame(gameId);
 
+  //upadte frontend Vercel
   // Aseguramos que el socket esté conectado al entrar
   useEffect(() => {
     getSocket();
