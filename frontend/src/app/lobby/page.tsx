@@ -114,9 +114,10 @@ function LobbyInner() {
     setBotCreating(botId);
     setError(null);
     try {
+
       const r = await api<{ gameId: string }>('/api/games/bot', {
         method: 'POST',
-        body: JSON.stringify({ botId, timeControl, color: 'random' }),
+        body: { botId, timeControl, color: 'random' },
       });
       router.push(`/game/${r.gameId}`);
     } catch (e: any) {
@@ -124,6 +125,7 @@ function LobbyInner() {
     } finally {
       setBotCreating(null);
     }
+
   }
 
   return (
