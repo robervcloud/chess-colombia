@@ -119,7 +119,10 @@ async function getAnalysis(gameId) {
     .from('game_analyses')
     .select(
       'game_id, status, engine_name, engine_depth, moves_analysis, summary, ' +
-      'elo_white, elo_black, error_message, created_at, started_at, completed_at'
+      'elo_white, elo_black, elo_confidence_white, elo_confidence_black, ' +
+      'elo_reasons_white, elo_reasons_black, ' +
+      'progress_current, progress_total, ' +
+      'error_message, created_at, started_at, completed_at'
     )
     .eq('game_id', gameId)
     .single();

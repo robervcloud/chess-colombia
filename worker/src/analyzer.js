@@ -18,7 +18,7 @@ const {
   classify,
   computeSideAccuracy,
   cpLossForMove,
-  estimateElo,
+  estimateEloV2,
 } = require('./metrics');
 
 const MATE_BIG = 100_000; // valor "infinito" para convertir mate -> cp interno
@@ -63,55 +63,28 @@ async function analyzeGame(engine, pgn, opts = {}) {
   for (let i = 0; i < positions.length; i++) {
     const a = await engine.analyze(positions[i].fen);
     positionEvals.push(a);
+    // Notificamos progreso de posiciones evaluadas
     onProgress(i + 1, positions.length);
+
+    // Si tenemos ya una pareja (i-1, i) → podemos construir el move (i-1)
+    // y emitir un onPartial con la jugada recién evaluada.
+    if (i >= 1 && i <= history.length && opts.onPartial) {
+      const moveIdx = i - 1;
+      const partial = buildMoveAnalysis(history[moveIdx], moveIdx,
+        positionEvals[moveIdx], positionEvals[moveIdx + 1],
+        positions[moveIdx].fen, positions[moveIdx + 1].fen);
+      try { opts.onPartial(partial, moveIdx, history.length); } catch {}
+    }
   }
 
-  // Construir per-move analysis
+  // Construir per-move analysis (usa el mismo helper que onPartial)
   const movesAnalysis = [];
   for (let i = 0; i < history.length; i++) {
-    const move = history[i];
-    const before = positionEvals[i];
-    const after  = positionEvals[i + 1];
-
-    const evalBefore = evalToCp(before);
-    const evalAfter  = evalToCp(after);
-
-    // ¿La jugada introdujo un mate forzado en contra del que la jugó?
-    // POV blancas: mate>0 = blancas matan, mate<0 = negras matan.
-    // Si white movió y ahora aparece mate<0 → blunder de white. Y viceversa.
-    let swung = false;
-    if (before.mate === null && after.mate !== null) {
-      if (move.color === 'w' && after.mate < 0) swung = true;
-      if (move.color === 'b' && after.mate > 0) swung = true;
-    }
-
-    const cpLoss = cpLossForMove(move.color, evalBefore, evalAfter);
-
-    // Clasificación
-    const isMate = (after.mate !== null && Math.abs(after.mate) <= 5);
-    const klass = classify(cpLoss, { swung });
-
-    movesAnalysis.push({
-      ply: i + 1,
-      san: move.san,
-      uci: `${move.from}${move.to}${move.promotion || ''}`,
-      color: move.color, // 'w' | 'b'
-      fenBefore: positions[i].fen,
-      fenAfter: positions[i + 1].fen,
-      // Evals en POV blancas (más fácil para la barra)
-      evalBefore,
-      evalAfter,
-      mateBefore: before.mate,
-      mateAfter: after.mate,
-      // Sugerencia del motor PARA esta posición
-      bestMoveSan: before.bestMoveSan,
-      bestMoveUci: before.bestMove,
-      // Top líneas (en SAN) desde fenBefore
-      lines: (before.lines || []).slice(0, 3),
-      centipawnLoss: cpLoss,
-      classification: klass,
-      isMateDetected: isMate,
-    });
+    movesAnalysis.push(buildMoveAnalysis(
+      history[i], i,
+      positionEvals[i], positionEvals[i + 1],
+      positions[i].fen, positions[i + 1].fen
+    ));
   }
 
   // Resumen
@@ -136,22 +109,51 @@ async function analyzeGame(engine, pgn, opts = {}) {
     truncated,
   };
 
+  // Elo v2 con razones + confianza
+  const eW = estimateEloV2({ accuracy: accW, moves: whiteMoves });
+  const eB = estimateEloV2({ accuracy: accB, moves: blackMoves });
   const eloEstimate = {
-    white: estimateElo({
-      accuracy: accW,
-      blunders: summary.blundersWhite,
-      mistakes: summary.mistakesWhite,
-      totalPlies: whiteMoves.length,
-    }),
-    black: estimateElo({
-      accuracy: accB,
-      blunders: summary.blundersBlack,
-      mistakes: summary.mistakesBlack,
-      totalPlies: blackMoves.length,
-    }),
+    white: eW.value,
+    black: eB.value,
+    confidenceWhite: eW.confidence,
+    confidenceBlack: eB.confidence,
+    reasonsWhite: eW.reasons,
+    reasonsBlack: eB.reasons,
   };
 
   return { movesAnalysis, summary, eloEstimate };
+}
+
+/** Construye una entrada per-move. Mismo shape en streaming y final. */
+function buildMoveAnalysis(move, idx, before, after, fenBefore, fenAfter) {
+  const evalBefore = evalToCp(before);
+  const evalAfter  = evalToCp(after);
+  let swung = false;
+  if (before.mate === null && after.mate !== null) {
+    if (move.color === 'w' && after.mate < 0) swung = true;
+    if (move.color === 'b' && after.mate > 0) swung = true;
+  }
+  const cpLoss = cpLossForMove(move.color, evalBefore, evalAfter);
+  const isMate = (after.mate !== null && Math.abs(after.mate) <= 5);
+  const klass = classify(cpLoss, { swung });
+  return {
+    ply: idx + 1,
+    san: move.san,
+    uci: `${move.from}${move.to}${move.promotion || ''}`,
+    color: move.color,
+    fenBefore,
+    fenAfter,
+    evalBefore,
+    evalAfter,
+    mateBefore: before.mate,
+    mateAfter: after.mate,
+    bestMoveSan: before.bestMoveSan,
+    bestMoveUci: before.bestMove,
+    lines: (before.lines || []).slice(0, 3),
+    centipawnLoss: cpLoss,
+    classification: klass,
+    isMateDetected: isMate,
+  };
 }
 
 function countBy(arr, key, value) {

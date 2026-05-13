@@ -45,13 +45,36 @@ async function markDone(gameId, result, engineMeta) {
       summary: result.summary,
       elo_white: result.eloEstimate.white,
       elo_black: result.eloEstimate.black,
+      elo_confidence_white: result.eloEstimate.confidenceWhite || null,
+      elo_confidence_black: result.eloEstimate.confidenceBlack || null,
+      elo_reasons_white: result.eloEstimate.reasonsWhite || null,
+      elo_reasons_black: result.eloEstimate.reasonsBlack || null,
       engine_name: engineMeta?.name || 'stockfish',
       engine_depth: engineMeta?.depth || null,
+      progress_current: result.movesAnalysis.length,
+      progress_total: result.movesAnalysis.length,
       completed_at: new Date().toISOString(),
       error_message: null,
     })
     .eq('game_id', gameId);
   if (error) throw new Error(`markDone: ${error.message}`);
+}
+
+/**
+ * Persiste progreso parcial. Llamado durante el análisis.
+ *  - current/total: contadores (siempre)
+ *  - partialMoves: moves_analysis acumulado hasta ahora (opcional, costoso)
+ *
+ * Hacer estos updates "best-effort": si fallan, sólo logueamos.
+ */
+async function markProgress(gameId, current, total, partialMoves) {
+  const patch = { progress_current: current, progress_total: total };
+  if (partialMoves) patch.moves_analysis = partialMoves;
+  const { error } = await supabase
+    .from('game_analyses')
+    .update(patch)
+    .eq('game_id', gameId);
+  if (error) console.warn('[worker.db.markProgress]', error.message);
 }
 
 async function markFailed(gameId, errorMessage) {
@@ -73,4 +96,4 @@ async function purgeOldAnalyses() {
   return data || 0;
 }
 
-module.exports = { claimNextPending, markDone, markFailed, purgeOldAnalyses };
+module.exports = { claimNextPending, markDone, markFailed, markProgress, purgeOldAnalyses };

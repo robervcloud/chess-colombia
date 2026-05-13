@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { Chess } from 'chess.js';
+import type { Square } from 'react-chessboard/dist/chessboard/types';
 
 import AuthGuard from '@/components/AuthGuard';
 import EvalBar from '@/components/EvalBar';
@@ -36,8 +37,9 @@ interface ApiResp {
   analysis: GameAnalysis | null;
 }
 
-const POLL_MS = 4000;
-const MAX_POLL_ATTEMPTS = 45; // 45 * 4s = 3 minutos. Tras esto, dejamos de polear.
+const POLL_MS_RUNNING = 1500;   // status='running' → polling rápido
+const POLL_MS_PENDING = 3000;   // status='pending' → más espaciado
+const STAGNATION_ATTEMPTS = 60; // sin avance en 60 intentos → asumir colgado
 
 function AnalysisInner() {
   const params = useParams<{ id: string }>();
@@ -48,36 +50,62 @@ function AnalysisInner() {
   const [data, setData] = useState<ApiResp | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedPly, setSelectedPly] = useState(0);
+  // Cuando hay streaming, si el usuario aún no navegó (sigue en 0)
+  // dejamos selectedPly al final del parcial para que vea la última jugada.
+  // Si ya tocó la NavBar, respetamos su selección.
+  const userTouchedNavRef = useRef(false);
+  // Tab activo en pantallas chicas (< lg). En lg+ se ignora.
+  const [mobileTab, setMobileTab] = useState<'board' | 'moves' | 'summary'>('board');
   const pollRef = useRef<number | null>(null);
 
-  // ---- Carga + polling cuando aún no está done ----
+  // ---- Carga + polling adaptativo ----
+  // Estrategia anti-cuelgue:
+  //  - Si status==='running' polleamos rápido (1.5s).
+  //  - Si current_progress sube, reseteamos contador (siempre hay vida).
+  //  - Si no sube en STAGNATION_ATTEMPTS rondas seguidas → mostramos
+  //    aviso pero seguimos intentando con backoff de 5s.
+  // Esto soluciona el "tengo que refrescar manual" en partidas largas:
+  // mientras el worker avance, no nos rendimos.
   useEffect(() => {
     let cancelled = false;
-    let attempts = 0;
+    let stagnant = 0;
+    let lastProgress = -1;
     async function load() {
       try {
         const resp = await api<ApiResp>(`/api/games/${gameId}/analysis`);
         if (cancelled) return;
         setData(resp);
         const status = resp.analysis?.status;
+        const current = resp.analysis?.progress_current ?? 0;
+
         if (status === 'done' || status === 'failed') {
           if (pollRef.current) {
             window.clearTimeout(pollRef.current);
             pollRef.current = null;
           }
-        } else if (attempts >= MAX_POLL_ATTEMPTS) {
-          // P1-3: tope de polling. Si tras 3 min no se completó, paramos
-          // y avisamos. El usuario puede recargar para reintentar.
-          setError(
-            'El análisis está tardando más de lo normal. Recarga la página para reintentar.'
-          );
-        } else {
-          attempts++;
-          pollRef.current = window.setTimeout(load, POLL_MS);
+          return;
         }
+
+        if (current > lastProgress) {
+          lastProgress = current;
+          stagnant = 0;
+          setError(null);
+        } else {
+          stagnant++;
+        }
+
+        let nextDelay = status === 'running' ? POLL_MS_RUNNING : POLL_MS_PENDING;
+        if (stagnant >= STAGNATION_ATTEMPTS) {
+          // No avanza hace rato; bajamos cadencia y avisamos suave
+          nextDelay = 5000;
+          setError('El análisis está tardando más de lo normal. Seguimos intentando…');
+        }
+        pollRef.current = window.setTimeout(load, nextDelay);
       } catch (e: any) {
         if (cancelled) return;
-        setError(e?.message || 'No se pudo cargar el análisis');
+        // Errores transitorios: NO matar el polling, reintentar con backoff
+        pollRef.current = window.setTimeout(load, 5000);
+        setError(e?.message || 'Error temporal al cargar; reintentando…');
       }
     }
     load();
@@ -123,8 +151,22 @@ function AnalysisInner() {
   const moves: MoveAnalysis[] = data?.analysis?.moves_analysis || [];
   const totalPlies = moves.length;
 
+  // Auto-follow: si estamos en streaming y el usuario aún no navegó,
+  // movemos selectedPly al final del parcial para mostrar lo más nuevo.
+  // También clamp defensivo: jamás permitir selectedPly fuera de rango.
+  useEffect(() => {
+    if (selectedPly > totalPlies) {
+      setSelectedPly(totalPlies);
+      return;
+    }
+    const isStreaming = data?.analysis?.status === 'running';
+    if (isStreaming && !userTouchedNavRef.current && totalPlies > 0) {
+      setSelectedPly(totalPlies);
+    }
+  }, [totalPlies, data?.analysis?.status, selectedPly]);
+
   // FEN + datos del ply seleccionado
-  const { fen, currentMove, evalCp, evalMate, currentLines, bestMoveSan } = useMemo(() => {
+  const { fen, currentMove, evalCp, evalMate, currentLines, bestMoveSan, bestMoveUci } = useMemo(() => {
     if (selectedPly === 0) {
       return {
         fen: 'start',
@@ -133,6 +175,7 @@ function AnalysisInner() {
         evalMate: null as number | null,
         currentLines: moves[0]?.lines || [],
         bestMoveSan: moves[0]?.bestMoveSan || null,
+        bestMoveUci: moves[0]?.bestMoveUci || null,
       };
     }
     const m = moves[selectedPly - 1];
@@ -144,8 +187,11 @@ function AnalysisInner() {
         evalMate: null,
         currentLines: [],
         bestMoveSan: null,
+        bestMoveUci: null,
       };
     }
+    // Para una posición ya jugada: la "mejor jugada sugerida" se calcula
+    // sobre fenBefore, así que la flecha apunta a lo que debería haber jugado.
     return {
       fen: m.fenAfter,
       currentMove: m,
@@ -153,8 +199,33 @@ function AnalysisInner() {
       evalMate: m.mateAfter,
       currentLines: m.lines || [],
       bestMoveSan: m.bestMoveSan || null,
+      bestMoveUci: m.bestMoveUci || null,
     };
   }, [moves, selectedPly]);
+
+  // Flechas para el tablero. Mostramos:
+  //  - la jugada real (más sutil, color cálido)
+  //  - la jugada óptima sugerida (dorado, más viva) — sólo si fue subóptima
+  const customArrows = useMemo<Array<[Square, Square, string]>>(() => {
+    const arr: Array<[Square, Square, string]> = [];
+    if (currentMove && currentMove.uci && currentMove.uci.length >= 4) {
+      const isOk = currentMove.classification === 'best' || currentMove.classification === 'excellent';
+      arr.push([
+        currentMove.uci.substring(0, 2) as Square,
+        currentMove.uci.substring(2, 4) as Square,
+        isOk ? 'rgba(58,160,120,0.55)' : 'rgba(160,90,70,0.55)',
+      ]);
+    }
+    // Flecha dorada con la mejor sugerencia (si difiere de la real)
+    if (bestMoveUci && bestMoveUci.length >= 4 && (!currentMove || currentMove.uci?.substring(0,4) !== bestMoveUci.substring(0,4))) {
+      arr.push([
+        bestMoveUci.substring(0, 2) as Square,
+        bestMoveUci.substring(2, 4) as Square,
+        'rgba(201, 162, 74, 0.85)',
+      ]);
+    }
+    return arr;
+  }, [currentMove, bestMoveUci]);
 
   // Orientación (te ponemos abajo)
   const myColor: 'w' | 'b' = data && user && data.game.black_id === user.id ? 'b' : 'w';
@@ -165,13 +236,17 @@ function AnalysisInner() {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
+        userTouchedNavRef.current = true;
         setSelectedPly((p) => Math.max(0, p - 1));
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
+        userTouchedNavRef.current = true;
         setSelectedPly((p) => Math.min(totalPlies, p + 1));
       } else if (e.key === 'Home') {
+        userTouchedNavRef.current = true;
         setSelectedPly(0);
       } else if (e.key === 'End') {
+        userTouchedNavRef.current = true;
         setSelectedPly(totalPlies);
       }
     }
@@ -211,18 +286,55 @@ function AnalysisInner() {
 
   const status = data.analysis?.status;
 
-  if (!data.analysis || status === 'pending' || status === 'running') {
+  if (!data.analysis || status === 'pending' || (status === 'running' && (data.analysis.moves_analysis?.length ?? 0) === 0)) {
+    const cur = data.analysis?.progress_current ?? 0;
+    const tot = data.analysis?.progress_total ?? 0;
+    const pct = tot > 0 ? Math.min(100, Math.round((cur / tot) * 100)) : 0;
     return (
       <Centered>
-        <div className="card-premium p-8 max-w-md text-center">
-          <h2 className="font-display text-3xl mb-2">Analizando tu partida</h2>
-          <p className="text-wood-600 mb-6">
-            Stockfish está revisando cada jugada. Esto suele tardar entre 10 y 30 segundos.
+        <div className="card-premium p-8 max-w-md w-full text-center">
+          <p className="text-[11px] uppercase tracking-[0.2em] text-gold mb-2">
+            {status === 'running' ? 'Analizando' : 'En cola'}
           </p>
-          <span className="loader-dots mb-2"><span /><span /><span /></span>
-          <p className="text-xs text-wood-500 mt-4">
-            La página se actualiza sola cuando el análisis termine.
+          <h2 className="font-display text-3xl mb-2">
+            {status === 'running' ? 'Stockfish está pensando' : 'Tu partida está esperando'}
+          </h2>
+          <p className="text-wood-600 text-sm mb-6">
+            {status === 'running'
+              ? 'Revisando jugada por jugada. La página se actualiza sola.'
+              : 'Tu partida será procesada en breve.'}
           </p>
+
+          {/* Progress bar con gradient dorado */}
+          <div className="w-full h-2 rounded-full bg-wood-100 overflow-hidden ring-1 ring-wood-200/60 shadow-inner">
+            <div
+              className="h-full transition-[width] duration-500 ease-out"
+              style={{
+                width: `${pct}%`,
+                background:
+                  'linear-gradient(90deg, #c9a24a 0%, #e8c873 50%, #c9a24a 100%)',
+                boxShadow: '0 0 12px rgba(232,200,115,0.5)',
+              }}
+            />
+          </div>
+          <p className="text-xs text-wood-500 mt-3 tabular-nums">
+            {tot > 0 ? `${cur} / ${tot} posiciones · ${pct}%` : 'Preparando…'}
+          </p>
+
+          {/* Skeleton dots animados */}
+          <div className="flex justify-center gap-1.5 mt-6">
+            {[0, 1, 2].map((i) => (
+              <span
+                key={i}
+                className="w-2 h-2 rounded-full bg-gold/60 animate-pulse"
+                style={{ animationDelay: `${i * 150}ms` }}
+              />
+            ))}
+          </div>
+
+          {error && (
+            <p className="text-xs text-wood-500 mt-4">{error}</p>
+          )}
         </div>
       </Centered>
     );
@@ -244,10 +356,15 @@ function AnalysisInner() {
     );
   }
 
-  // status === 'done'
-  const summary = data.analysis.summary!;
+  // status === 'done' o 'running' con parcial
+  const isLive = status === 'running';
+  const partialMoves = data.analysis.moves_analysis || [];
+  const summary = data.analysis.summary || computeQuickSummary(partialMoves);
   const eloW = data.analysis.elo_white;
   const eloB = data.analysis.elo_black;
+  const progressCur = data.analysis.progress_current ?? 0;
+  const progressTot = data.analysis.progress_total ?? 0;
+  const progressPct = progressTot > 0 ? Math.min(100, Math.round((progressCur / progressTot) * 100)) : 0;
 
   return (
     <section className="flex-1 max-w-7xl mx-auto w-full px-5 py-8">
@@ -259,13 +376,76 @@ function AnalysisInner() {
         </h1>
         <p className="text-wood-600 text-sm mt-1">
           {data.game.time_control} · resultado {data.game.result || '—'} ·{' '}
-          {summary.totalPlies} jugadas
-          {summary.truncated && ' (truncado)'}
+          {summary.totalPlies} jugadas{!isLive && summary.truncated && ' (truncado)'}
         </p>
       </header>
 
+      {isLive && (
+        <div className="mb-5 rounded-xl border border-gold/40 bg-gold/5 px-4 py-3 animate-fadeIn">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div className="flex items-center gap-2">
+              <span className="relative inline-flex h-2 w-2">
+                <span className="absolute inset-0 rounded-full bg-gold animate-ping opacity-60" />
+                <span className="relative rounded-full h-2 w-2 bg-gold" />
+              </span>
+              <span className="text-xs uppercase tracking-[0.18em] text-gold font-medium">
+                En vivo
+              </span>
+              <span className="text-xs text-wood-600">
+                Stockfish analizando · puedes navegar las jugadas ya procesadas
+              </span>
+            </div>
+            <span className="text-xs tabular-nums text-wood-700">
+              {progressPct}%
+            </span>
+          </div>
+          <div className="h-1.5 rounded-full bg-wood-100 overflow-hidden ring-1 ring-wood-200/50">
+            <div
+              className="h-full transition-[width] duration-500 ease-out"
+              style={{
+                width: `${progressPct}%`,
+                background: 'linear-gradient(90deg, #c9a24a 0%, #e8c873 50%, #c9a24a 100%)',
+                boxShadow: '0 0 8px rgba(232,200,115,0.4)',
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="mb-5 text-xs text-wood-600 bg-wood-50 border border-wood-100 rounded-md px-3 py-2">
+          {error}
+        </div>
+      )}
+
+      {/* Tab bar para pantallas < lg. En lg+ está oculta y se ven los 3 paneles. */}
+      <div className="lg:hidden mb-4 sticky top-0 z-10 bg-parch/95 backdrop-blur-sm -mx-5 px-5 py-2 border-b border-wood-100">
+        <div className="flex gap-1 rounded-md bg-wood-50 p-1 ring-1 ring-wood-100">
+          {([
+            ['board', 'Tablero'],
+            ['moves', 'Jugadas'],
+            ['summary', 'Resumen'],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setMobileTab(key)}
+              className={[
+                'flex-1 py-1.5 text-xs uppercase tracking-wider rounded transition-colors',
+                mobileTab === key
+                  ? 'bg-parch text-ink shadow-sm font-medium'
+                  : 'text-wood-600 hover:text-ink',
+              ].join(' ')}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="grid lg:grid-cols-[auto_1fr_320px] gap-5 items-start">
-        {/* Columna izquierda: barra de eval + tablero */}
+        {/* Columna izquierda: barra de eval + tablero
+            (visible siempre en lg; en mobile sólo si tab === 'board') */}
+        <div className={`${mobileTab === 'board' ? 'block' : 'hidden'} lg:block`}>
         <div className="flex gap-3">
           <EvalBar cp={evalCp} mate={evalMate} height={boardWidth} />
           <div>
@@ -280,6 +460,7 @@ function AnalysisInner() {
                 arePiecesDraggable={false}
                 boardOrientation={myColor === 'b' ? 'black' : 'white'}
                 boardWidth={boardWidth}
+                customArrows={customArrows}
                 customBoardStyle={{
                   borderRadius: '12px',
                   boxShadow: '0 12px 40px -12px rgba(58,39,22,0.35)',
@@ -296,13 +477,14 @@ function AnalysisInner() {
             <NavBar
               ply={selectedPly}
               total={totalPlies}
-              onChange={setSelectedPly}
+              onChange={(p) => { userTouchedNavRef.current = true; setSelectedPly(p); }}
             />
           </div>
         </div>
+        </div>
 
-        {/* Columna media: motor */}
-        <aside className="card-premium p-5 w-full">
+        {/* Columna media: motor (visible en lg, o en mobile cuando tab='moves') */}
+        <aside className={`${mobileTab === 'moves' ? 'block' : 'hidden'} lg:block card-premium p-5 w-full`}>
           <h3 className="font-display text-lg mb-1">Motor</h3>
           <p className="text-xs text-wood-500 mb-3">
             {data.analysis.engine_name || 'stockfish'} · profundidad {data.analysis.engine_depth ?? '—'}
@@ -340,10 +522,14 @@ function AnalysisInner() {
           />
         </aside>
 
-        {/* Columna derecha: jugadas + resumen */}
-        <aside className="card-premium p-5 w-full">
+        {/* Columna derecha: jugadas + resumen.
+            En desktop (lg) sticky para mantenerse visible.
+            En mobile dividida: jugadas → tab 'moves' (junto al motor), resumen → tab 'summary'. */}
+        <aside className={`${mobileTab === 'summary' ? 'block' : 'hidden'} lg:block card-premium p-5 w-full lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto`}>
           <h3 className="font-display text-lg mb-3">Jugadas</h3>
-          <MoveList moves={moves} selectedPly={selectedPly} onSelect={setSelectedPly} />
+          <div className="max-h-[40vh] lg:max-h-[36vh] overflow-y-auto pr-1">
+            <MoveList moves={moves} selectedPly={selectedPly} onSelect={(p) => { userTouchedNavRef.current = true; setSelectedPly(p); }} />
+          </div>
 
           <div className="divider-gold my-5" />
 
@@ -360,8 +546,18 @@ function AnalysisInner() {
             Elo estimado
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <EloPill label={data.game.white_username} value={eloW} />
-            <EloPill label={data.game.black_username} value={eloB} />
+            <EloPillEx
+              label={data.game.white_username}
+              value={eloW}
+              confidence={data.analysis.elo_confidence_white}
+              reasons={data.analysis.elo_reasons_white}
+            />
+            <EloPillEx
+              label={data.game.black_username}
+              value={eloB}
+              confidence={data.analysis.elo_confidence_black}
+              reasons={data.analysis.elo_reasons_black}
+            />
           </div>
           <p className="text-[10px] text-wood-500 mt-2 italic">
             Estimación de nivel de juego, no Elo oficial.
@@ -471,8 +667,78 @@ function EloPill({ label, value }: { label: string; value: number | null }) {
   );
 }
 
+/**
+ * Variante extendida con confianza + razones.
+ *  - confidence: 'high' | 'medium' | 'low'  (afecta intensidad visual)
+ *  - reasons: hasta 4 frases cortas que explican la estimación.
+ *
+ * El tooltip muestra todas las razones; debajo del número, mostramos
+ * un chip pequeño con la confianza.
+ */
+function EloPillEx({
+  label,
+  value,
+  confidence,
+  reasons,
+}: {
+  label: string;
+  value: number | null;
+  confidence?: 'high' | 'medium' | 'low' | null;
+  reasons?: string[] | null;
+}) {
+  const conf = confidence || 'medium';
+  const confLabel = conf === 'high' ? 'Alta' : conf === 'medium' ? 'Media' : 'Baja';
+  const confTone =
+    conf === 'high' ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+    : conf === 'low' ? 'bg-wood-100 text-wood-700 border-wood-200'
+    : 'bg-gold/15 text-wood-700 border-gold/30';
+
+  const reasonsText = (reasons && reasons.length > 0)
+    ? reasons.join(' · ')
+    : 'Estimación basada en accuracy global y patrones de errores';
+
+  return (
+    <div
+      className="rounded-lg border border-gold/40 bg-gold/5 px-3 py-2 text-center cursor-help"
+      title={reasonsText}
+    >
+      <div className="text-[10px] uppercase tracking-wider text-wood-500 truncate">{label}</div>
+      <div className="font-display text-2xl tabular-nums text-ink">{value ?? '—'}</div>
+      <div className={`mt-1 inline-block text-[10px] px-2 py-0.5 rounded border ${confTone}`}>
+        Confianza: {confLabel}
+      </div>
+      {reasons && reasons.length > 0 && (
+        <p className="text-[10px] text-wood-600 mt-1.5 leading-snug line-clamp-2">
+          {reasons[0]}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function fmtPct(v: number | null) {
   return v === null ? null : `${v}%`;
+}
+
+/** Resumen mínimo derivado del array parcial; usado mientras status==='running'. */
+function computeQuickSummary(moves: any[]): any {
+  const w = moves.filter((m) => m.color === 'w');
+  const b = moves.filter((m) => m.color === 'b');
+  const countCls = (arr: any[], c: string) => arr.filter((x) => x.classification === c).length;
+  return {
+    accuracyWhite: null,
+    accuracyBlack: null,
+    blundersWhite: countCls(w, 'blunder'),
+    blundersBlack: countCls(b, 'blunder'),
+    mistakesWhite: countCls(w, 'mistake'),
+    mistakesBlack: countCls(b, 'mistake'),
+    inaccuraciesWhite: countCls(w, 'inaccuracy'),
+    inaccuraciesBlack: countCls(b, 'inaccuracy'),
+    bestMovesWhite: countCls(w, 'best'),
+    bestMovesBlack: countCls(b, 'best'),
+    totalPlies: moves.length,
+    truncated: false,
+  };
 }
 
 export default function AnalysisPage() {

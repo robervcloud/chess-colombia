@@ -1,9 +1,18 @@
 /**
- * Métricas: clasificación de jugadas, accuracy y Elo estimado.
+ * Métricas: clasificación de jugadas, accuracy y estimador de Elo.
  *
- * Las constantes y la fórmula de winPercent/accuracy provienen del
- * paper público de Lichess (open source); el cálculo de Elo es un
- * heurístico simple basado en accuracy + blunders.
+ * Lo nuevo respecto a versiones previas:
+ *   - estimateElo: continuo (interpolación calibrada), multi-feature
+ *     (no sólo accuracy: ACPL, blunders, mistakes, consistencia,
+ *      conversión, complejidad media).
+ *   - Penalización proporcional al total de jugadas (no absoluta).
+ *   - Sin hard cap en 2400: el techo es 2800 pero alcanzarlo requiere
+ *     muchas jugadas precisas y baja varianza.
+ *   - Shrinkage suave hacia 1200 para partidas cortas.
+ *   - Confidence: 'high' | 'medium' | 'low'.
+ *   - Reasons: array de strings explicativos (para UI).
+ *
+ * Sin dependencias externas, sólo aritmética.
  */
 
 // ----- Clasificación por centipawn loss -----
@@ -29,14 +38,9 @@ function moveAccuracy(wpBefore, wpAfter) {
   return Math.max(0, Math.min(100, 103.1668 * Math.exp(-0.04354 * delta) - 3.1669));
 }
 
-/**
- * Accuracy promedio para una lista de jugadas de un mismo color.
- * Cada movimiento `m` debe traer evalBefore/evalAfter ya en POV blancas.
- */
 function computeSideAccuracy(moves) {
   if (!moves || moves.length === 0) return null;
-  let sum = 0;
-  let n = 0;
+  let sum = 0, n = 0;
   for (const m of moves) {
     if (typeof m.evalBefore !== 'number' || typeof m.evalAfter !== 'number') continue;
     let wpBefore, wpAfter;
@@ -51,48 +55,218 @@ function computeSideAccuracy(moves) {
     n++;
   }
   if (n === 0) return null;
-  return Math.round((sum / n) * 10) / 10; // 1 decimal
+  return Math.round((sum / n) * 10) / 10;
 }
 
-/**
- * Centipawn loss de una jugada en POV del jugador que la hizo.
- * eval{Before,After} están en POV blancas.
- */
 function cpLossForMove(moverColor, evalBefore, evalAfter) {
   if (moverColor === 'w') return Math.max(0, evalBefore - evalAfter);
   return Math.max(0, evalAfter - evalBefore);
 }
 
+/* =========================================================
+ *                  ELO ESTIMATOR v2
+ * ========================================================= */
+
+// Interpolación lineal segmentada accuracy→Elo, calibrada manualmente
+// para sentirse humana. Sin hard cap, pero la curva se vuelve muy
+// empinada arriba: 96+ acc cuesta mucho de mantener en partidas largas.
+const ACC_TO_ELO_POINTS = [
+  [30,  500],
+  [40,  650],
+  [50,  850],
+  [60, 1100],
+  [70, 1350],
+  [75, 1500],
+  [80, 1650],
+  [83, 1750],
+  [85, 1830],
+  [88, 1950],
+  [90, 2050],
+  [92, 2160],
+  [94, 2260],
+  [95, 2330],
+  [96, 2410],
+  [97, 2500],
+  [98, 2620],
+  [99, 2740],
+  [99.5, 2820],
+];
+
+function eloFromAccuracy(acc) {
+  if (acc === null || acc === undefined) return 1200;
+  const pts = ACC_TO_ELO_POINTS;
+  if (acc <= pts[0][0]) return pts[0][1];
+  if (acc >= pts[pts.length - 1][0]) return pts[pts.length - 1][1];
+  for (let i = 1; i < pts.length; i++) {
+    if (acc <= pts[i][0]) {
+      const [a1, e1] = pts[i - 1];
+      const [a2, e2] = pts[i];
+      return e1 + (e2 - e1) * (acc - a1) / (a2 - a1);
+    }
+  }
+  return 1200;
+}
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+function stdev(arr) {
+  if (!arr || arr.length < 2) return 0;
+  const m = arr.reduce((a, b) => a + b, 0) / arr.length;
+  const v = arr.reduce((a, b) => a + (b - m) * (b - m), 0) / arr.length;
+  return Math.sqrt(v);
+}
+
 /**
- * Heurístico de Elo a partir de accuracy + nº blunders/mistakes.
- * NO es un Elo oficial; es una "estimación de nivel de juego".
+ * Estima Elo con múltiples features.
+ *
+ * `moves` es la lista de jugadas YA analizadas del jugador en cuestión,
+ * cada una con { centipawnLoss, classification, evalBefore, evalAfter,
+ *                color, lines? }.
+ *
+ * Devuelve { value, confidence: 'high'|'medium'|'low', reasons: string[] }.
  */
-function estimateElo({ accuracy, blunders, mistakes, totalPlies }) {
-  if (accuracy === null || accuracy === undefined) return 1200;
+function estimateEloV2({ accuracy, moves }) {
+  const reasons = [];
+  const n = moves ? moves.length : 0;
 
-  // Curva base por accuracy
-  let elo;
-  if      (accuracy >= 95) elo = 2200;
-  else if (accuracy >= 90) elo = 2000;
-  else if (accuracy >= 85) elo = 1800;
-  else if (accuracy >= 80) elo = 1600;
-  else if (accuracy >= 75) elo = 1400;
-  else if (accuracy >= 70) elo = 1300;
-  else if (accuracy >= 65) elo = 1200;
-  else if (accuracy >= 60) elo = 1100;
-  else if (accuracy >= 50) elo = 950;
-  else                     elo = 800;
-
-  // Penalizaciones
-  elo -= Math.min(240, (blunders || 0) * 60);
-  elo -= Math.min(100, (mistakes || 0) * 25);
-
-  // Partidas cortas: menos confianza, regresar al medio
-  if (totalPlies && totalPlies < 20) {
-    elo = Math.round(elo * 0.6 + 1200 * 0.4);
+  if (!moves || n === 0 || accuracy === null || accuracy === undefined) {
+    return { value: 1200, confidence: 'low', reasons: ['Datos insuficientes'] };
   }
 
-  return Math.max(600, Math.min(2400, elo));
+  // ---- (1) Base por accuracy (continuo) ----
+  let elo = eloFromAccuracy(accuracy);
+
+  // ---- (2) Penalizaciones proporcionales ----
+  const blunders   = moves.filter((m) => m.classification === 'blunder').length;
+  const mistakes   = moves.filter((m) => m.classification === 'mistake').length;
+  const inaccs     = moves.filter((m) => m.classification === 'inaccuracy').length;
+  const bestCount  = moves.filter((m) => m.classification === 'best' || m.classification === 'excellent').length;
+
+  const blunderRate  = blunders / n;
+  const mistakeRate  = mistakes / n;
+  const inaccRate    = inaccs / n;
+  const bestRate     = bestCount / n;
+
+  // Curva: 1 blunder en 10 jugadas pesa más que 1 en 60.
+  elo -= 600 * blunderRate;          // 10% blunders → -60
+  elo -= 250 * mistakeRate;
+  elo -= 80  * inaccRate;
+
+  if (blunderRate > 0.10) reasons.push('Blunders frecuentes en momentos críticos');
+  else if (blunders > 0)  reasons.push(`${blunders} blunder${blunders > 1 ? 's' : ''}`);
+
+  // ---- (3) Bonus por consistencia (varianza baja de cpLoss) ----
+  const cpLosses = moves.map((m) => Math.min(500, m.centipawnLoss || 0));
+  const sd = stdev(cpLosses);
+  // sd<30 muy consistente; sd>120 errático
+  const consistencyBonus = clamp(60 - (sd - 30) * 0.5, -40, 60);
+  elo += consistencyBonus;
+  if (sd < 35 && n >= 15) reasons.push('Precisión sostenida durante toda la partida');
+  else if (sd > 150)      reasons.push('Calidad inconsistente entre jugadas');
+
+  // ---- (4) Bonus por jugadas óptimas frecuentes ----
+  if (bestRate > 0.55 && n >= 20) {
+    elo += 50;
+    reasons.push('Alta tasa de mejores jugadas');
+  }
+
+  // ---- (5) Conversión: mantener ventaja sin perderla ----
+  // Si en algún momento el jugador tenía >+200cp y al final lo perdió:
+  let peakAdvantage = 0;
+  let endAdvantage = null;
+  const color = moves[0]?.color;
+  for (const m of moves) {
+    const advAfter = color === 'w' ? m.evalAfter : -m.evalAfter;
+    if (advAfter > peakAdvantage) peakAdvantage = advAfter;
+    endAdvantage = advAfter;
+  }
+  if (peakAdvantage > 250 && endAdvantage !== null && endAdvantage < 50) {
+    elo -= 80;
+    reasons.push('Perdió una ventaja decisiva durante la partida');
+  } else if (peakAdvantage > 200 && endAdvantage !== null && endAdvantage > 150) {
+    elo += 30;
+    reasons.push('Conservó la ventaja con técnica');
+  }
+
+  // ---- (6) Complejidad de las posiciones (diff entre top líneas) ----
+  // Si las 2 mejores líneas estaban muy parejas → posición compleja.
+  // Un jugador que encuentra la #1 en posición compleja merece más mérito.
+  let complexityHits = 0;
+  let complexitySamples = 0;
+  for (const m of moves) {
+    if (!Array.isArray(m.lines) || m.lines.length < 2) continue;
+    const e1 = lineEval(m.lines[0]);
+    const e2 = lineEval(m.lines[1]);
+    if (e1 === null || e2 === null) continue;
+    complexitySamples++;
+    const diff = Math.abs(e1 - e2);
+    // Posición compleja: <50cp de diferencia. El jugador encontró la mejor.
+    if (diff < 50 && m.classification === 'best') complexityHits++;
+  }
+  if (complexitySamples >= 10) {
+    const rate = complexityHits / complexitySamples;
+    if (rate > 0.4) {
+      elo += 60;
+      reasons.push('Buen criterio en posiciones complejas');
+    }
+  }
+
+  // ---- (7) Shrinkage para partidas cortas ----
+  // < 20 jugadas: el muestreo es pobre; empujamos hacia la media (1200)
+  let confidence = 'high';
+  if (n < 10) {
+    elo = elo * 0.4 + 1200 * 0.6;
+    confidence = 'low';
+    reasons.push('Partida muy corta para estimar con precisión');
+  } else if (n < 20) {
+    elo = elo * 0.65 + 1200 * 0.35;
+    confidence = 'low';
+    reasons.push('Pocas jugadas: estimación con poca confianza');
+  } else if (n < 35) {
+    elo = elo * 0.85 + 1200 * 0.15;
+    confidence = 'medium';
+  }
+
+  // Confidence también baja si la varianza es muy alta (juego errático)
+  if (sd > 180 && confidence === 'high') confidence = 'medium';
+  if (sd > 250) confidence = 'low';
+
+  // ---- (8) Techo soft alto: 2800. Sin hard cap arbitrario. ----
+  elo = clamp(elo, 400, 2800);
+
+  // Reason por defecto si no se acumuló ninguno
+  if (reasons.length === 0) {
+    if (accuracy >= 90) reasons.push('Alta precisión global');
+    else if (accuracy >= 80) reasons.push('Juego sólido en general');
+    else reasons.push('Errores ocasionales');
+  }
+
+  return {
+    value: Math.round(elo),
+    confidence,
+    reasons: reasons.slice(0, 4), // top 4 razones
+  };
+}
+
+// Helper: extrae eval (en cp POV blancas) de una line si fue almacenada
+function lineEval(line) {
+  if (!line) return null;
+  if (typeof line.cp === 'number') return line.cp;
+  if (typeof line.mate === 'number') return line.mate > 0 ? 10000 : -10000;
+  return null;
+}
+
+// Wrapper legacy (compatibilidad con código que sólo necesita el número)
+function estimateElo({ accuracy, blunders, mistakes, totalPlies, moves }) {
+  if (moves) return estimateEloV2({ accuracy, moves }).value;
+  // Fallback simplificado si nos llaman sin moves (compatibilidad)
+  let elo = eloFromAccuracy(accuracy);
+  elo -= 60 * (blunders || 0);
+  elo -= 25 * (mistakes || 0);
+  if (totalPlies && totalPlies < 20) {
+    elo = elo * 0.65 + 1200 * 0.35;
+  }
+  return Math.round(clamp(elo, 400, 2800));
 }
 
 module.exports = {
@@ -102,4 +276,5 @@ module.exports = {
   computeSideAccuracy,
   cpLossForMove,
   estimateElo,
+  estimateEloV2,
 };

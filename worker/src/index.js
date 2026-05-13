@@ -96,10 +96,26 @@ async function processOne(job) {
 
   const eng = await ensureEngine();
   try {
+    // Acumulador de moves parciales para persistir incrementalmente
+    const partial = [];
+    let lastPersistAt = 0;
+    const PARTIAL_BATCH = 6; // persistir cada 6 jugadas analizadas
     const result = await analyzeGame(eng, job.pgn, {
       onProgress: (i, total) => {
         if (i === total || i % 10 === 0) {
           process.stdout.write(`\r[worker]   ${job.game_id}: ${i}/${total} posiciones    `);
+        }
+        // Counter ligero (sin tocar moves_analysis): cada call
+        db.markProgress(job.game_id, i, total).catch(() => {});
+      },
+      onPartial: (move, moveIdx, totalMoves) => {
+        partial.push(move);
+        // Persistir moves_analysis parcial cada PARTIAL_BATCH (evita
+        // UPDATE de jsonb grande en cada jugada).
+        if (partial.length - lastPersistAt >= PARTIAL_BATCH || moveIdx + 1 === totalMoves) {
+          lastPersistAt = partial.length;
+          db.markProgress(job.game_id, partial.length * 2, totalMoves * 2 + 1, partial.slice())
+            .catch(() => {});
         }
       },
     });

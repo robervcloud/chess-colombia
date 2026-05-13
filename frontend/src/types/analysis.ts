@@ -56,6 +56,8 @@ export interface AnalysisSummary {
   truncated: boolean;
 }
 
+export type EloConfidence = 'high' | 'medium' | 'low';
+
 export interface GameAnalysis {
   game_id: string;
   status: AnalysisStatus;
@@ -65,6 +67,12 @@ export interface GameAnalysis {
   summary: AnalysisSummary | null;
   elo_white: number | null;
   elo_black: number | null;
+  elo_confidence_white: EloConfidence | null;
+  elo_confidence_black: EloConfidence | null;
+  elo_reasons_white: string[] | null;
+  elo_reasons_black: string[] | null;
+  progress_current: number | null;
+  progress_total: number | null;
   error_message: string | null;
   created_at: string;
   started_at: string | null;
