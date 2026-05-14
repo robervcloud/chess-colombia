@@ -10,6 +10,7 @@ const helmet = require('helmet');
 const env = require('./config/env');
 const authRoutes = require('./routes/auth');
 const gameRoutes = require('./routes/games');
+const tacticsRoutes = require('./routes/tactics');
 const { errorHandler } = require('./middleware/errorHandler');
 const { apiLimiter } = require('./middleware/rateLimiter');
 
@@ -34,6 +35,7 @@ app.get('/health', (_, res) => res.json({ ok: true, ts: Date.now() }));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/games', gameRoutes);
+app.use('/api/tactics', tacticsRoutes);
 
 // 404
 app.use((req, res) => res.status(404).json({ error: 'Ruta no encontrada' }));
