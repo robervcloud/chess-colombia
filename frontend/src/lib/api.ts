@@ -33,7 +33,12 @@ export async function api<T = unknown>(path: string, opts: RequestOptions = {}):
   const res = await fetch(`${BASE}${path}`, {
     method: opts.method || 'GET',
     headers,
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
+    body:
+      typeof opts.body === 'string'
+        ? opts.body
+        : opts.body
+          ? JSON.stringify(opts.body)
+          : undefined,
   });
 
   const data = await res.json().catch(() => ({}));
