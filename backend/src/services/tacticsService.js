@@ -46,7 +46,9 @@ async function getOrCreateStats(userId) {
   }
   if (data) return data;
 
-  // Crear fila inicial
+  // Crear fila inicial — UPSERT idempotente.
+  // Si dos requests llegan a la vez, ninguna falla con duplicate-key:
+  // ignoreDuplicates evita conflicto; luego re-leemos el row real.
   const init = {
     user_id: userId,
     rating: 800,
@@ -59,16 +61,24 @@ async function getOrCreateStats(userId) {
     by_theme: {},
     recent_ids: [],
   };
-  const { data: inserted, error: insErr } = await supabase
+  const { error: upErr } = await supabase
     .from('user_tactics_stats')
-    .insert(init)
-    .select('*')
-    .single();
-  if (insErr) {
-    console.error('[tactics.getOrCreateStats.insert]', insErr);
+    .upsert(init, { onConflict: 'user_id', ignoreDuplicates: true });
+  if (upErr) {
+    console.error('[tactics.getOrCreateStats.upsert]', upErr);
     throw { status: 500, message: 'No se pudo crear stats' };
   }
-  return inserted;
+  // Re-leer (siempre, porque ignoreDuplicates no devuelve la fila existente)
+  const { data: reread, error: rrErr } = await supabase
+    .from('user_tactics_stats')
+    .select('*')
+    .eq('user_id', userId)
+    .single();
+  if (rrErr || !reread) {
+    console.error('[tactics.getOrCreateStats.reread]', rrErr);
+    throw { status: 500, message: 'No se pudo leer stats tras upsert' };
+  }
+  return reread;
 }
 
 /** Selecciona un puzzle adecuado y devuelve el shape para el cliente. */
@@ -208,16 +218,10 @@ async function recordAttempt(userId, { puzzleId, solved, hintsUsed = 0, timeMs =
     if (error) console.warn('[tactics.recordAttempt.insertAttempt]', error.message);
   });
 
-  // 6) Update agregados del puzzle (popularidad, success_rate)
-  supabase.rpc('puzzle_update_aggregates', { p_puzzle_id: puzzleId, p_solved: solved })
-    .then(({ error }) => {
-      if (error) {
-        // Si la RPC no existe (no es crítica), ignorar silenciosamente
-        if (!String(error.message).includes('does not exist')) {
-          console.warn('[tactics.recordAttempt.rpc]', error.message);
-        }
-      }
-    });
+  // Nota: los agregados por puzzle (popularity / success_rate) NO se
+  // actualizan aquí. Se pueden recalcular offline cuando haga falta
+  // (ver scripts/recompute_puzzle_aggregates.sql como referencia).
+  // Quitar este paso evita warnings de RPC inexistente y ahorra 1 round-trip.
 
   return {
     delta,
