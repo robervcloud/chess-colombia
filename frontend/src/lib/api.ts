@@ -3,6 +3,7 @@
  * automáticamente si está en localStorage.
  */
 const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+console.log('[API_BASE]', BASE);
 
 export const TOKEN_KEY = 'chess_co_token';
 
