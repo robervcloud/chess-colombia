@@ -101,24 +101,38 @@ function Inner() {
   useEffect(() => { loadNext(); }, [loadNext]);
 
   /* ---------- Lógica al soltar pieza ---------- */
-  function onDrop(sourceSquare: string, targetSquare: string, piece: string): boolean {
+  function onDrop(sourceSquare: string, targetSquare: string, _piece: string): boolean {
     if (phase !== 'playing' || !puzzle) return false;
 
-    const isPromotion = piece[1] === 'P' &&
-      (targetSquare[1] === '8' || targetSquare[1] === '1');
-    const promo = isPromotion ? 'q' : undefined;
+    // Detectar promoción mirando la pieza REAL en chess.js (no `piece` de
+    // react-chessboard, que cambia de "wP" a "wQ" después del diálogo
+    // interno y rompe la detección por string).
+    const before = chessRef.current.get(sourceSquare as Square);
+    const isPawnPromotion = !!before
+      && before.type === 'p'
+      && ((before.color === 'w' && targetSquare[1] === '8') ||
+          (before.color === 'b' && targetSquare[1] === '1'));
 
     const move = (() => {
       try {
-        return chessRef.current.move({ from: sourceSquare, to: targetSquare, promotion: promo as any });
+        const moveObj: { from: string; to: string; promotion?: 'q' | 'r' | 'b' | 'n' } = {
+          from: sourceSquare,
+          to: targetSquare,
+        };
+        // MVP: queen-only. Para underpromotions usar onPromotionPieceSelect
+        // de react-chessboard (TODO opcional).
+        if (isPawnPromotion) moveObj.promotion = 'q';
+        return chessRef.current.move(moveObj);
       } catch { return null; }
     })();
     if (!move) return false;
 
-    // ¿Era la jugada correcta?
+    // Construir UCI usando el campo `promotion` del MOVE OBJECT (autoridad
+    // de chess.js), no la variable local. Así si más adelante soportamos
+    // underpromotions, sólo hay que cambiar dónde se pide la pieza.
     const expected = puzzle.solution[solutionIdx];
-    const playedUci = `${sourceSquare}${targetSquare}${promo || ''}`;
-    const ok = expected && playedUci.toLowerCase() === expected.toLowerCase();
+    const playedUci = `${sourceSquare}${targetSquare}${move.promotion || ''}`;
+    const ok = !!expected && playedUci.toLowerCase() === expected.toLowerCase();
 
     if (!ok) {
       // Feedback de error
