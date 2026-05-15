@@ -181,7 +181,7 @@ function Inner() {
     try {
       const r = await api<AttemptResult>('/api/tactics/attempt', {
         method: 'POST',
-        body: JSON.stringify({ puzzleId: puzzle.id, solved, hintsUsed, timeMs }),
+        body: { puzzleId: puzzle.id, solved, hintsUsed, timeMs },
       });
       setLastResult(r);
       setStats((s) => s ? { ...s, rating: r.newRating, current_streak: r.streak, best_streak: r.bestStreak, solved: r.solved, attempted: r.attempted } : s);
