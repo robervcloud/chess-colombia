@@ -27,4 +27,21 @@ async function stats(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { getNext, attempt, stats };
+async function daily(req, res, next) {
+  try {
+    const puzzle = await tacticsService.getDailyPuzzle();
+    res.json({ puzzle });
+  } catch (err) { next(err); }
+}
+
+async function rush(req, res, next) {
+  try {
+    const { score, maxCombo, durationSec, mode } = req.body || {};
+    const result = await tacticsService.submitRushRun(req.user.id, {
+      score, maxCombo, durationSec, mode,
+    });
+    res.json(result);
+  } catch (err) { next(err); }
+}
+
+module.exports = { getNext, attempt, stats, daily, rush };

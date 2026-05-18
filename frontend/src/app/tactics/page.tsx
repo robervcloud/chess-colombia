@@ -15,6 +15,31 @@ const Chessboard = dynamic(
 
 type Square = `${'a'|'b'|'c'|'d'|'e'|'f'|'g'|'h'}${'1'|'2'|'3'|'4'|'5'|'6'|'7'|'8'}`;
 
+/* ---- Sonido premium sintetizado (sin assets, sin libs) ----
+ * Tonos cortos estilo "wood/click". Respeta silencio si el navegador
+ * no soporta WebAudio o el usuario aún no interactuó. */
+let _ac: AudioContext | null = null;
+function tone(freq: number, durMs: number, type: OscillatorType = 'sine', gain = 0.05) {
+  if (typeof window === 'undefined') return;
+  try {
+    _ac = _ac || new (window.AudioContext || (window as any).webkitAudioContext)();
+    const ctx = _ac;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = type;
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(gain, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + durMs / 1000);
+    o.connect(g); g.connect(ctx.destination);
+    o.start(); o.stop(ctx.currentTime + durMs / 1000);
+  } catch { /* silencio si falla */ }
+}
+const sfx = {
+  move:    () => tone(220, 70, 'triangle', 0.04),
+  success: () => { tone(523, 90, 'sine', 0.05); setTimeout(() => tone(784, 120, 'sine', 0.05), 90); },
+  fail:    () => tone(150, 180, 'sawtooth', 0.035),
+};
+
 /* ---- Estado del puzzle activo ---- */
 type Phase = 'loading' | 'playing' | 'success' | 'fail' | 'empty';
 
@@ -138,6 +163,7 @@ function Inner() {
       // Feedback de error
       chessRef.current.undo();
       flashSquare(targetSquare, 'rgba(200,60,60,0.45)');
+      sfx.fail();
       setFeedback('No es la mejor jugada. Inténtalo otra vez.');
       setFen(chessRef.current.fen());
       return false; // react-chessboard revertirá visualmente
@@ -145,6 +171,7 @@ function Inner() {
 
     // Acierto: aplicar move (ya aplicado en chess) y avanzar
     flashSquare(targetSquare, 'rgba(60,160,120,0.45)');
+    sfx.move();
     setFen(chessRef.current.fen());
     setFeedback(null);
 
@@ -191,6 +218,7 @@ function Inner() {
   async function finish(solved: boolean) {
     if (submittedRef.current || !puzzle) return;
     submittedRef.current = true;
+    if (solved) sfx.success(); else sfx.fail();
     const timeMs = Date.now() - startTimeRef.current;
     try {
       const r = await api<AttemptResult>('/api/tactics/attempt', {
@@ -198,7 +226,16 @@ function Inner() {
         body: { puzzleId: puzzle.id, solved, hintsUsed, timeMs },
       });
       setLastResult(r);
-      setStats((s) => s ? { ...s, rating: r.newRating, current_streak: r.streak, best_streak: r.bestStreak, solved: r.solved, attempted: r.attempted } : s);
+      setStats((s) => s ? {
+        ...s,
+        rating: r.newRating,
+        current_streak: r.streak,
+        best_streak: r.bestStreak,
+        solved: r.solved,
+        attempted: r.attempted,
+        daily_streak: (r as any).dailyStreak ?? s.daily_streak,
+        xp: (r as any).xp ?? s.xp,
+      } : s);
       setPhase(solved ? 'success' : 'fail');
     } catch (e: any) {
       setError(e?.message || 'No se pudo registrar el intento');
@@ -435,6 +472,55 @@ function StatsPanel({ stats, currentPuzzleRating }: { stats: TacticsStats | null
           )}
         </div>
       </div>
+
+      {/* Combo fire + daily streak */}
+      <div className="flex items-center justify-between mt-3 gap-2">
+        <div className="flex items-center gap-1.5">
+          <span
+            className="text-lg leading-none transition-transform"
+            style={{
+              filter: stats.current_streak >= 5 ? 'saturate(1.3)' : 'grayscale(0.6) opacity(0.5)',
+              transform: stats.current_streak >= 10 ? 'scale(1.25)' : 'scale(1)',
+            }}
+            title={`Racha actual: ${stats.current_streak}`}
+          >
+            🔥
+          </span>
+          <span className="text-sm font-medium tabular-nums text-wood-700">
+            {stats.current_streak}
+            {stats.current_streak >= 10 && <span className="ml-1 text-gold text-[10px] uppercase">en llamas</span>}
+          </span>
+        </div>
+        <div className="text-[11px] text-wood-600" title="Días consecutivos resolviendo">
+          <span className="tabular-nums font-medium">{stats.daily_streak ?? 0}</span>
+          <span className="text-wood-500"> días seguidos</span>
+        </div>
+      </div>
+
+      {/* Barra XP — progresión sutil dentro del "nivel" actual (cada 500 XP) */}
+      {(() => {
+        const xp = stats.xp ?? 0;
+        const level = Math.floor(xp / 500) + 1;
+        const into = xp % 500;
+        const pct = Math.round((into / 500) * 100);
+        return (
+          <div className="mt-3">
+            <div className="flex justify-between text-[10px] uppercase tracking-wider text-wood-500 mb-1">
+              <span>Nivel {level}</span>
+              <span className="tabular-nums">{into}/500 XP</span>
+            </div>
+            <div className="h-1.5 rounded-full bg-wood-100 overflow-hidden ring-1 ring-wood-200/50">
+              <div
+                className="h-full transition-[width] duration-700 ease-out"
+                style={{
+                  width: `${pct}%`,
+                  background: 'linear-gradient(90deg, #c9a24a 0%, #e8c873 50%, #c9a24a 100%)',
+                }}
+              />
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="grid grid-cols-3 gap-2 mt-4">
         <Tile label="Racha"  value={stats.current_streak} accent />

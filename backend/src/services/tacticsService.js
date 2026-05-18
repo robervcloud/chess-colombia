@@ -188,6 +188,24 @@ async function recordAttempt(userId, { puzzleId, solved, hintsUsed = 0, timeMs =
     byTheme[t] = cur;
   }
 
+  // Daily streak + XP. Días consecutivos resolviendo (zona UTC).
+  // XP: +10 por resolver, +bonus por dificultad relativa, 0 si falla.
+  const today = new Date().toISOString().slice(0, 10);
+  let dailyStreak = stats.daily_streak || 0;
+  if (solved) {
+    const last = stats.last_solved_day; // 'YYYY-MM-DD' | null
+    if (last === today) {
+      // ya contó hoy, no cambia el streak
+    } else {
+      const yest = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+      dailyStreak = last === yest ? dailyStreak + 1 : 1;
+    }
+  }
+  const xpGain = solved
+    ? 10 + Math.max(0, Math.round((puzzle.rating - stats.rating) / 100)) * 2
+    : 0;
+  const newXp = (stats.xp || 0) + xpGain;
+
   // 4) Persistir stats
   const { error: uErr } = await supabase
     .from('user_tactics_stats')
@@ -201,6 +219,9 @@ async function recordAttempt(userId, { puzzleId, solved, hintsUsed = 0, timeMs =
       total_time_ms: stats.total_time_ms + timeMs,
       by_theme: byTheme,
       recent_ids: newRecent,
+      daily_streak: dailyStreak,
+      last_solved_day: solved ? today : (stats.last_solved_day || null),
+      xp: newXp,
       updated_at: new Date().toISOString(),
     })
     .eq('user_id', userId);
@@ -230,11 +251,114 @@ async function recordAttempt(userId, { puzzleId, solved, hintsUsed = 0, timeMs =
     bestStreak: newBest,
     solved: newSolved,
     attempted: newAttempted,
+    dailyStreak,
+    xp: newXp,
+    xpGain,
   };
+}
+
+/* ===================== PARTE 3: Daily Puzzle ===================== */
+
+function hashDay(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+/**
+ * Puzzle del día — determinístico: todos los usuarios ven el mismo.
+ * Se cachea en daily_puzzles para no recalcular ni cambiar a mitad del día.
+ */
+async function getDailyPuzzle() {
+  const today = new Date().toISOString().slice(0, 10);
+
+  const { data: existing } = await supabase
+    .from('daily_puzzles')
+    .select('puzzle_id')
+    .eq('day', today)
+    .maybeSingle();
+
+  let puzzleId = existing?.puzzle_id || null;
+
+  if (!puzzleId) {
+    const { data: cand } = await supabase
+      .from('puzzles')
+      .select('id')
+      .gte('rating', 1400)
+      .lte('rating', 1850)
+      .order('popularity', { ascending: false })
+      .limit(300);
+    if (cand && cand.length) {
+      puzzleId = cand[hashDay(today) % cand.length].id;
+      await supabase
+        .from('daily_puzzles')
+        .upsert({ day: today, puzzle_id: puzzleId }, { onConflict: 'day', ignoreDuplicates: true });
+    }
+  }
+
+  if (!puzzleId) throw { status: 404, message: 'No hay puzzles para el daily' };
+
+  const { data: p, error } = await supabase
+    .from('puzzles')
+    .select('id, fen, moves_uci, rating, themes')
+    .eq('id', puzzleId)
+    .single();
+  if (error || !p) throw { status: 404, message: 'Puzzle diario no encontrado' };
+
+  const moves = p.moves_uci.split(/\s+/).filter(Boolean);
+  return {
+    id: p.id,
+    fen: p.fen,
+    rating: p.rating,
+    themes: p.themes || [],
+    setupMove: moves[0] || null,
+    solution: moves.slice(1),
+    day: today,
+  };
+}
+
+/* ===================== PARTE 3: Puzzle Rush ===================== */
+
+/**
+ * Registra una corrida de Puzzle Rush. El scoring/validación de cada
+ * puzzle ocurre client-side (igual que el modo normal: contenido
+ * individual, no competitivo entre usuarios). Acá sólo persistimos
+ * el resultado agregado para leaderboard futuro.
+ */
+async function submitRushRun(userId, { score, maxCombo, durationSec, mode }) {
+  const s = Math.max(0, parseInt(score, 10) || 0);
+  const c = Math.max(0, parseInt(maxCombo, 10) || 0);
+  const d = Math.max(0, Math.min(3600, parseInt(durationSec, 10) || 0));
+  const m = ['3min', '5min', 'survival'].includes(mode) ? mode : '3min';
+
+  const { error } = await supabase
+    .from('puzzle_rush_runs')
+    .insert({ user_id: userId, mode: m, score: s, max_combo: c, duration_sec: d });
+  if (error) {
+    console.warn('[tactics.submitRushRun]', error.message);
+    throw { status: 500, message: 'No se pudo registrar la corrida' };
+  }
+
+  const { data: best } = await supabase
+    .from('puzzle_rush_runs')
+    .select('score')
+    .eq('user_id', userId)
+    .eq('mode', m)
+    .order('score', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return { recorded: true, mode: m, score: s, best: best?.score ?? s };
 }
 
 async function getStats(userId) {
   return await getOrCreateStats(userId);
 }
 
-module.exports = { getNextPuzzle, recordAttempt, getStats };
+module.exports = {
+  getNextPuzzle,
+  recordAttempt,
+  getStats,
+  getDailyPuzzle,
+  submitRushRun,
+};

@@ -19,6 +19,9 @@ export interface TacticsStats {
   total_time_ms: number;
   by_theme: Record<string, { solved: number; attempted: number }>;
   recent_ids: string[];
+  daily_streak: number;
+  last_solved_day: string | null;
+  xp: number;
   updated_at: string;
 }
 
@@ -29,4 +32,7 @@ export interface AttemptResult {
   bestStreak: number;
   solved: number;
   attempted: number;
+  dailyStreak: number;
+  xp: number;
+  xpGain: number;
 }
