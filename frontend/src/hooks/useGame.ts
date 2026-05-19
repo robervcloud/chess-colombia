@@ -10,6 +10,23 @@ import type {
   PlayerInfo,
 } from '@/types';
 
+/** Lado de un jugador en la actualización de rating post-partida. */
+export interface RatingUpdateSide {
+  userId: string;
+  old: number;
+  new: number;
+  delta: number;
+  rd: number;
+  provisional: boolean;
+}
+
+/** Payload del evento socket `rating:update` (emitido por gameService). */
+export interface RatingUpdate {
+  mode: 'bullet' | 'blitz' | 'rapid' | 'classical';
+  white: RatingUpdateSide;
+  black: RatingUpdateSide;
+}
+
 interface UseGameResult {
   ready: boolean;
   notFound: boolean;
@@ -21,6 +38,8 @@ interface UseGameResult {
   black: PlayerInfo | null;
   isMyTurn: boolean;
   endResult: GameEndPayload | null;
+  /** Actualización de rating tras finalizar (null hasta que llega). */
+  ratingUpdate: RatingUpdate | null;
   opponentDisconnected: boolean;
   errorMsg: string | null;
   /** Reloj — ms restantes según el último snapshot del server */
@@ -56,6 +75,7 @@ export function useGame(gameId: string): UseGameResult {
   const [white, setWhite] = useState<PlayerInfo | null>(null);
   const [black, setBlack] = useState<PlayerInfo | null>(null);
   const [endResult, setEndResult] = useState<GameEndPayload | null>(null);
+  const [ratingUpdate, setRatingUpdate] = useState<RatingUpdate | null>(null);
   const [opponentDisconnected, setOpponentDisconnected] = useState(false);
   const [ready, setReady] = useState(false);
   const [notFound, setNotFound] = useState(false);
@@ -133,6 +153,11 @@ export function useGame(gameId: string): UseGameResult {
       setReady(true);
     }
 
+    function onRatingUpdate(rt: RatingUpdate) {
+      if (cancelled || !rt) return;
+      setRatingUpdate(rt);
+    }
+
     function onMatchFound(p: GameStatePayload) {
       if (cancelled || p.gameId !== gameId) return;
       applyState(p);
@@ -162,6 +187,7 @@ export function useGame(gameId: string): UseGameResult {
     socket.on('game:state', onState);
     socket.on('game:move', onMove);
     socket.on('game:end', onEnd);
+    socket.on('rating:update', onRatingUpdate);
     socket.on('game:not_found', onNotFound);
     socket.on('opponent:disconnected', onOppDisconnected);
     socket.on('opponent:reconnected', onOppReconnected);
@@ -207,6 +233,7 @@ export function useGame(gameId: string): UseGameResult {
       socket.off('game:state', onState);
       socket.off('game:move', onMove);
       socket.off('game:end', onEnd);
+      socket.off('rating:update', onRatingUpdate);
       socket.off('game:not_found', onNotFound);
       socket.off('opponent:disconnected', onOppDisconnected);
       socket.off('opponent:reconnected', onOppReconnected);
@@ -253,6 +280,7 @@ export function useGame(gameId: string): UseGameResult {
     black,
     isMyTurn,
     endResult,
+    ratingUpdate,
     opponentDisconnected,
     errorMsg,
     whiteMs,

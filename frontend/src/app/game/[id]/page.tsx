@@ -1,12 +1,15 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
+import { Chess } from 'chess.js';
 import AuthGuard from '@/components/AuthGuard';
 import { useGame } from '@/hooks/useGame';
+import { detectOpening } from '@/lib/openings';
 import { getSocket } from '@/lib/socket';
 import Clock from '@/components/Clock';
+import type { RatingUpdate } from '@/hooks/useGame';
 
 // react-chessboard usa APIs del DOM; lo cargamos solo en cliente
 const ChessBoardView = dynamic(() => import('@/components/ChessBoard'), { ssr: false });
@@ -27,6 +30,7 @@ function GameInner() {
     black,
     isMyTurn,
     endResult,
+    ratingUpdate,
     opponentDisconnected,
     errorMsg,
     whiteMs,
@@ -35,6 +39,22 @@ function GameInner() {
     makeMove,
     resign,
   } = useGame(gameId);
+
+  // Objetivo 2: detección de apertura desde el PGN. Sólo recalcula
+  // cuando cambia el pgn (no en cada render/tick de reloj). chess.js
+  // parsea el PGN y extrae los SAN; detectOpening hace lookup O(plies).
+  const opening = useMemo(() => {
+    if (!pgn) return { info: null, outOfBook: false };
+    try {
+      const c = new Chess();
+      c.loadPgn(pgn);
+      const san = c.history();
+      if (san.length === 0) return { info: null, outOfBook: false };
+      return detectOpening(san);
+    } catch {
+      return { info: null, outOfBook: false };
+    }
+  }, [pgn]);
 
   //upadte frontend Vercel
   // Aseguramos que el socket esté conectado al entrar
@@ -95,6 +115,21 @@ function GameInner() {
           />
 
           <div className="my-3">
+            {opening.info && (
+              <div className="mb-2 flex items-center justify-center gap-2 animate-fadeIn">
+                <span className="text-[10px] uppercase tracking-widest text-wood-400 tabular-nums">
+                  {opening.info.eco}
+                </span>
+                <span className="text-sm font-medium text-wood-700">
+                  {opening.info.name}
+                </span>
+                {opening.outOfBook && (
+                  <span className="text-[10px] uppercase tracking-wider text-wood-400 italic">
+                    · fuera de teoría
+                  </span>
+                )}
+              </div>
+            )}
             <ChessBoardView
               fen={fen}
               myColor={myColor}
@@ -146,6 +181,10 @@ function GameInner() {
               <Row label="Por" value={translateTermination(endResult.termination)} />
             )}
           </div>
+
+          {endResult && ratingUpdate && (
+            <RatingDelta ru={ratingUpdate} myColor={myColor} />
+          )}
 
           {!endResult ? (
             <button
@@ -233,6 +272,64 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
     <div className="flex justify-between border-b border-wood-50 pb-1.5">
       <span className="text-wood-600">{label}</span>
       <span className="font-medium">{value}</span>
+    </div>
+  );
+}
+
+/**
+ * Tarjeta de cambio de rating post-partida. Elige el lado correcto
+ * comparando myColor con white/black del payload. Anima el número
+ * desde `old` hasta `new` y aplica glow cálido (verde sube / rojo baja).
+ */
+function RatingDelta({ ru, myColor }: { ru: RatingUpdate; myColor: 'w' | 'b' | null }) {
+  const side = myColor === 'b' ? ru.black : ru.white;
+  const [shown, setShown] = useState<number>(side?.old ?? 0);
+
+  useEffect(() => {
+    if (!side) return;
+    const from = side.old;
+    const to = side.new;
+    const dur = 900;
+    const t0 = performance.now();
+    let raf = 0;
+    const tick = (now: number) => {
+      const p = Math.min(1, (now - t0) / dur);
+      const eased = 1 - Math.pow(1 - p, 3); // easeOutCubic
+      setShown(Math.round(from + (to - from) * eased));
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [side]);
+
+  if (!side) return null;
+  const up = side.delta >= 0;
+  const deltaTxt = `${up ? '+' : ''}${side.delta}`;
+
+  return (
+    <div
+      className="mb-5 rounded-xl px-4 py-3 text-center border animate-fadeIn"
+      style={{
+        borderColor: up ? 'rgba(58,160,120,0.4)' : 'rgba(180,80,70,0.4)',
+        background: up ? 'rgba(58,160,120,0.06)' : 'rgba(180,80,70,0.06)',
+        boxShadow: up
+          ? '0 0 22px -8px rgba(58,160,120,0.5)'
+          : '0 0 22px -8px rgba(180,80,70,0.45)',
+      }}
+    >
+      <div className="text-[10px] uppercase tracking-[0.18em] text-wood-500 mb-1">
+        Rating {ru.mode}
+        {side.provisional && <span className="ml-1 text-gold">· provisional</span>}
+      </div>
+      <div className="flex items-baseline justify-center gap-2">
+        <span className="font-display text-3xl tabular-nums text-ink">{shown}</span>
+        <span
+          className="font-display text-lg tabular-nums"
+          style={{ color: up ? '#2f9d6e' : '#b4564a' }}
+        >
+          {deltaTxt}
+        </span>
+      </div>
     </div>
   );
 }
