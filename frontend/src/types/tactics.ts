@@ -35,4 +35,32 @@ export interface AttemptResult {
   dailyStreak: number;
   xp: number;
   xpGain: number;
+  cleanSolve: boolean;
+  counted: boolean;
+  repeat: boolean;
+}
+
+export type Difficulty = 'easy' | 'normal' | 'hard' | 'extreme';
+
+export interface RadarItem {
+  theme: string;
+  total: number;
+  accuracy: number;
+}
+
+export interface TacticsInsights {
+  range: string;
+  rating: number;
+  rd: number;
+  totalAttempts: number;
+  correct: number;
+  incorrect: number;
+  withHints: number;
+  repeated: number;
+  pendingRepeat: number;
+  accuracy: number | null;
+  avgTimeMs: number;
+  ratingGain: number;
+  lowData: boolean;
+  radar: RadarItem[];
 }

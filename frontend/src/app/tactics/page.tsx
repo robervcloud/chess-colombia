@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic';
 import { Chess } from 'chess.js';
 import AuthGuard from '@/components/AuthGuard';
 import { api } from '@/lib/api';
-import type { TacticsPuzzle, TacticsStats, AttemptResult } from '@/types/tactics';
+import type { TacticsPuzzle, TacticsStats, AttemptResult, Difficulty, TacticsInsights, RadarItem } from '@/types/tactics';
 
 // Reusamos react-chessboard como en la página de análisis
 const Chessboard = dynamic(
@@ -60,6 +60,22 @@ function Inner() {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<AttemptResult | null>(null);
 
+  // Parte 1: dificultad elegida por el usuario (persistida en localStorage).
+  const [difficulty, setDifficulty] = useState<Difficulty>('normal');
+  // Parte 6: modo repeat (entrenar fallados, rating neutro).
+  const [repeatMode, setRepeatMode] = useState(false);
+
+  useEffect(() => {
+    try {
+      const d = localStorage.getItem('tactics_difficulty') as Difficulty | null;
+      if (d && ['easy', 'normal', 'hard', 'extreme'].includes(d)) setDifficulty(d);
+    } catch { /* ignore */ }
+  }, []);
+  function changeDifficulty(d: Difficulty) {
+    setDifficulty(d);
+    try { localStorage.setItem('tactics_difficulty', d); } catch { /* ignore */ }
+  }
+
   // Estado del tablero
   const chessRef = useRef<Chess>(new Chess());
   const [fen, setFen] = useState<string>('start');
@@ -69,6 +85,9 @@ function Inner() {
   const [highlight, setHighlight] = useState<Record<string, React.CSSProperties>>({});
   const startTimeRef = useRef<number>(0);
   const submittedRef = useRef(false);
+  // Parte 5: si el usuario hizo al menos un movimiento incorrecto en este
+  // puzzle, ya no gana rating/XP (aunque después lo resuelva).
+  const wrongMoveRef = useRef(false);
 
   /* ---------- Cargar stats al montar ---------- */
   useEffect(() => {
@@ -94,8 +113,11 @@ function Inner() {
     setHighlight({});
     setSolutionIdx(0);
     submittedRef.current = false;
+    wrongMoveRef.current = false;
     try {
-      const r = await api<{ puzzle: TacticsPuzzle }>('/api/tactics/next');
+      const qs = new URLSearchParams({ difficulty });
+      if (repeatMode) qs.set('mode', 'repeat');
+      const r = await api<{ puzzle: TacticsPuzzle }>(`/api/tactics/next?${qs.toString()}`);
       const p = r.puzzle;
       setPuzzle(p);
 
@@ -121,7 +143,7 @@ function Inner() {
       else setError(e?.message || 'No se pudo cargar puzzle');
       setPhase('empty');
     }
-  }, []);
+  }, [difficulty, repeatMode]);
 
   useEffect(() => { loadNext(); }, [loadNext]);
 
@@ -164,7 +186,8 @@ function Inner() {
       chessRef.current.undo();
       flashSquare(targetSquare, 'rgba(200,60,60,0.45)');
       sfx.fail();
-      setFeedback('No es la mejor jugada. Inténtalo otra vez.');
+      wrongMoveRef.current = true; // Parte 5: ya no gana rating en este puzzle
+      setFeedback('Movimiento incorrecto. Este ejercicio ya no suma rating, pero puedes seguir intentándolo.');
       setFen(chessRef.current.fen());
       return false; // react-chessboard revertirá visualmente
     }
@@ -223,7 +246,14 @@ function Inner() {
     try {
       const r = await api<AttemptResult>('/api/tactics/attempt', {
         method: 'POST',
-        body: { puzzleId: puzzle.id, solved, hintsUsed, timeMs },
+        body: {
+          puzzleId: puzzle.id,
+          solved,
+          hintsUsed,
+          timeMs,
+          hadWrongMove: wrongMoveRef.current,
+          mode: repeatMode ? 'repeat' : undefined,
+        },
       });
       setLastResult(r);
       setStats((s) => s ? {
@@ -278,9 +308,32 @@ function Inner() {
         <p className="text-accent font-medium uppercase tracking-widest text-xs">Tácticas</p>
         <h1 className="font-display text-3xl mt-1">Entrenamiento</h1>
         <p className="text-wood-600 text-sm mt-1">
-          Resuelve puzzles para subir tu rating táctico. La dificultad se ajusta sola.
+          Elige tu dificultad. Pista o movimiento incorrecto = ejercicio fallado (sin rating).
         </p>
       </header>
+
+      {/* Parte 1: segmented control de dificultad + repeat toggle */}
+      <div className="mb-5 flex flex-wrap items-center gap-3">
+        <DifficultyControl value={difficulty} onChange={changeDifficulty} disabled={phase === 'loading'} />
+        <button
+          onClick={() => setRepeatMode((v) => !v)}
+          className={[
+            'px-3 py-2 rounded-lg text-xs uppercase tracking-wider border transition-all',
+            repeatMode
+              ? 'border-gold/60 bg-gold/15 text-wood-800 shadow-[0_0_14px_-4px_rgba(201,162,74,0.6)]'
+              : 'border-wood-200 bg-wood-50 text-wood-600 hover:text-ink',
+          ].join(' ')}
+          title="Repetir ejercicios fallados (rating neutro)"
+        >
+          {repeatMode ? '● Repaso de fallados' : 'Repaso de fallados'}
+        </button>
+        <a
+          href="/tactics/panel"
+          className="ml-auto text-xs uppercase tracking-wider text-wood-600 hover:text-accent transition border-b border-transparent hover:border-accent pb-0.5"
+        >
+          Panel de ejercicios →
+        </a>
+      </div>
 
       {error && (
         <div className="mb-4 text-sm text-danger bg-danger/10 border border-danger/20 rounded-md px-3 py-2">
@@ -564,5 +617,59 @@ function ThemeList({ items }: { items: Array<[string, number]> }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+/* ===== Parte 1: Segmented control de dificultad ===== */
+function DifficultyControl({
+  value, onChange, disabled,
+}: {
+  value: Difficulty;
+  onChange: (d: Difficulty) => void;
+  disabled?: boolean;
+}) {
+  const opts: Array<[Difficulty, string, string]> = [
+    ['easy', 'Fácil', '−300'],
+    ['normal', 'Normal', '±100'],
+    ['hard', 'Difícil', '+300'],
+    ['extreme', 'Extremo', '+600'],
+  ];
+  return (
+    <div
+      className="inline-flex rounded-lg p-1 bg-wood-50 ring-1 ring-wood-200/70"
+      role="tablist"
+      aria-label="Dificultad"
+    >
+      {opts.map(([key, label, hint]) => {
+        const active = value === key;
+        return (
+          <button
+            key={key}
+            role="tab"
+            aria-selected={active}
+            disabled={disabled}
+            onClick={() => onChange(key)}
+            className={[
+              'relative px-3.5 py-1.5 rounded-md text-xs font-medium transition-all duration-200',
+              'disabled:opacity-50 disabled:cursor-not-allowed',
+              active
+                ? 'bg-parch text-ink shadow-sm'
+                : 'text-wood-600 hover:text-ink',
+            ].join(' ')}
+            style={
+              active
+                ? { boxShadow: '0 0 16px -6px rgba(201,162,74,0.7), 0 1px 2px rgba(58,39,22,0.15)' }
+                : undefined
+            }
+            title={`Rating objetivo: tu rating ${hint}`}
+          >
+            <span className="block leading-tight">{label}</span>
+            <span className={`block text-[9px] tabular-nums ${active ? 'text-gold' : 'text-wood-400'}`}>
+              {hint}
+            </span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
