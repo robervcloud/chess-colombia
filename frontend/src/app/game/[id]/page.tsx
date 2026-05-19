@@ -1,15 +1,15 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { Chess } from 'chess.js';
 import AuthGuard from '@/components/AuthGuard';
 import { useGame } from '@/hooks/useGame';
 import { detectOpening } from '@/lib/openings';
+import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import Clock from '@/components/Clock';
-import type { RatingUpdate } from '@/hooks/useGame';
 
 // react-chessboard usa APIs del DOM; lo cargamos solo en cliente
 const ChessBoardView = dynamic(() => import('@/components/ChessBoard'), { ssr: false });
@@ -197,12 +197,7 @@ function GameInner() {
             </button>
           ) : (
             <div className="space-y-2">
-              <button
-                className="btn-primary w-full"
-                onClick={() => router.push(`/game/${gameId}/analysis`)}
-              >
-                Ver análisis de la partida
-              </button>
+              <AnalysisCTA gameId={gameId} />
               <button
                 className="btn-ghost w-full"
                 onClick={() => router.push('/lobby')}
@@ -281,7 +276,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
  * comparando myColor con white/black del payload. Anima el número
  * desde `old` hasta `new` y aplica glow cálido (verde sube / rojo baja).
  */
-function RatingDelta({ ru, myColor }: { ru: RatingUpdate; myColor: 'w' | 'b' | null }) {
+function RatingDelta({ ru, myColor }: { ru: any; myColor: 'w' | 'b' | null }) {
   const side = myColor === 'b' ? ru.black : ru.white;
   const [shown, setShown] = useState<number>(side?.old ?? 0);
 
@@ -353,5 +348,113 @@ export default function GamePage() {
     <AuthGuard>
       <GameInner />
     </AuthGuard>
+  );
+}
+
+/**
+ * CTA de análisis post-partida.
+ *
+ * - Hace polling EFICIENTE de /api/games/:id/analysis:
+ *     · cada 2.5s mientras status ∈ {pending, running}
+ *     · se DETIENE en cuanto status === 'done' o 'failed'
+ *     · cleanup completo al desmontar (clearTimeout + cancelled flag)
+ * - No redirige automáticamente. Hasta `done` muestra "Analizando…"
+ *   con barra sutil + %. Recién con `done` aparece "Ver análisis".
+ *
+ * Navegación SIEMPRE a /game/[id]/analysis (ruta correcta, fija).
+ */
+function AnalysisCTA({ gameId }: { gameId: string }) {
+  const router = useRouter();
+  const [status, setStatus] = useState<'pending' | 'running' | 'done' | 'failed' | 'unknown'>('unknown');
+  const [pct, setPct] = useState<number>(0);
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function tick() {
+      try {
+        const r = await api<{ analysis: any }>(`/api/games/${gameId}/analysis`);
+        if (cancelled) return;
+        const a = r.analysis;
+        if (!a) {
+          setStatus('pending');
+        } else {
+          setStatus(a.status || 'pending');
+          const cur = a.progress_current ?? 0;
+          const tot = a.progress_total ?? 0;
+          if (tot > 0) setPct(Math.min(100, Math.round((cur / tot) * 100)));
+          if (a.status === 'done' || a.status === 'failed') {
+            return; // detener polling — no reprogramar
+          }
+        }
+      } catch {
+        if (cancelled) return;
+        // error transitorio: reintentar con el mismo ritmo, sin romper
+      }
+      timerRef.current = window.setTimeout(tick, 2500);
+    }
+
+    tick();
+    return () => {
+      cancelled = true;
+      if (timerRef.current) window.clearTimeout(timerRef.current);
+    };
+  }, [gameId]);
+
+  if (status === 'done') {
+    return (
+      <button
+        className="btn-primary w-full animate-fadeIn"
+        onClick={() => router.push(`/game/${gameId}/analysis`)}
+      >
+        Ver análisis de la partida
+      </button>
+    );
+  }
+
+  if (status === 'failed') {
+    return (
+      <button
+        className="btn-ghost w-full"
+        onClick={() => router.push(`/game/${gameId}/analysis`)}
+        title="Abrir la página de análisis (reintentará)"
+      >
+        Reintentar análisis
+      </button>
+    );
+  }
+
+  // pending | running | unknown → estado "analizando" premium, sin redirigir
+  return (
+    <div className="w-full rounded-lg border border-gold/30 bg-gold/5 px-4 py-3">
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="flex items-center gap-2">
+          <span className="relative inline-flex h-2 w-2">
+            <span className="absolute inset-0 rounded-full bg-gold animate-ping opacity-60" />
+            <span className="relative rounded-full h-2 w-2 bg-gold" />
+          </span>
+          <span className="text-xs uppercase tracking-[0.16em] text-wood-700">
+            Analizando partida…
+          </span>
+        </div>
+        {pct > 0 && (
+          <span className="text-xs tabular-nums text-wood-600">{pct}%</span>
+        )}
+      </div>
+      <div className="h-1.5 rounded-full bg-wood-100 overflow-hidden ring-1 ring-wood-200/50">
+        <div
+          className="h-full transition-[width] duration-500 ease-out"
+          style={{
+            width: pct > 0 ? `${pct}%` : '15%',
+            background: 'linear-gradient(90deg, #c9a24a 0%, #e8c873 50%, #c9a24a 100%)',
+            boxShadow: '0 0 8px rgba(232,200,115,0.4)',
+          }}
+        />
+      </div>
+      <p className="text-[11px] text-wood-500 mt-2">
+        El botón aparecerá cuando esté listo. Puedes esperar aquí o volver al lobby.
+      </p>
+    </div>
   );
 }
