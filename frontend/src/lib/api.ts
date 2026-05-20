@@ -3,7 +3,11 @@
  * automáticamente si está en localStorage.
  */
 const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-console.log('[API_BASE]', BASE);
+// Log sólo en desarrollo. En producción no ensucia consola.
+if (typeof window !== 'undefined' && process.env.NODE_ENV !== 'production') {
+  // eslint-disable-next-line no-console
+  console.log('[API_BASE]', BASE);
+}
 
 export const TOKEN_KEY = 'chess_co_token';
 

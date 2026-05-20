@@ -184,6 +184,84 @@ async function deleteAnalysis(gameId) {
   }
 }
 
+/**
+ * Aplica Glicko-2 al cierre de partida. Devuelve null si la partida es
+ * vs bot (uno de los IDs faltante). Persiste rating + RD + vol del modo
+ * correspondiente en `users` e inserta filas en `rating_history`.
+ *
+ * Se llama desde gameHandler.endGame TRAS finishGame, y el resultado se
+ * emite por socket `rating:update`.
+ */
+async function applyRatingForGame({ whiteId, blackId, result, timeControl, gameId }) {
+  if (!whiteId || !blackId) return null; // vs bot
+  const rating = require('./ratingService');
+  const mode = rating.modeFromTimeControl(timeControl);
+
+  const cols = `id, rating_${mode}, rd_${mode}, vol_${mode}, games_${mode}`;
+  const { data: rows, error: selErr } = await supabase
+    .from('users')
+    .select(cols)
+    .in('id', [whiteId, blackId]);
+  if (selErr || !rows) {
+    console.error('[applyRatingForGame] select error:', selErr);
+    return null;
+  }
+  const wRow = rows.find((r) => r.id === whiteId);
+  const bRow = rows.find((r) => r.id === blackId);
+  if (!wRow || !bRow) return null;
+
+  const white = { rating: wRow[`rating_${mode}`], rd: wRow[`rd_${mode}`], vol: wRow[`vol_${mode}`] };
+  const black = { rating: bRow[`rating_${mode}`], rd: bRow[`rd_${mode}`], vol: bRow[`vol_${mode}`] };
+
+  const score = rating.whiteScoreFromResult(result);
+  const out = rating.computeGame(white, black, score);
+
+  const updW = {
+    [`rating_${mode}`]: out.white.rating,
+    [`rd_${mode}`]:     out.white.rd,
+    [`vol_${mode}`]:    out.white.vol,
+    [`games_${mode}`]:  (wRow[`games_${mode}`] || 0) + 1,
+  };
+  const updB = {
+    [`rating_${mode}`]: out.black.rating,
+    [`rd_${mode}`]:     out.black.rd,
+    [`vol_${mode}`]:    out.black.vol,
+    [`games_${mode}`]:  (bRow[`games_${mode}`] || 0) + 1,
+  };
+  const [uw, ub] = await Promise.all([
+    supabase.from('users').update(updW).eq('id', whiteId),
+    supabase.from('users').update(updB).eq('id', blackId),
+  ]);
+  if (uw.error) console.warn('[applyRatingForGame] update white:', uw.error.message);
+  if (ub.error) console.warn('[applyRatingForGame] update black:', ub.error.message);
+
+  // Historial (best-effort)
+  supabase.from('rating_history').insert([
+    { user_id: whiteId, mode, game_id: gameId, rating: out.white.rating, rd: out.white.rd, delta: out.white.rating - white.rating },
+    { user_id: blackId, mode, game_id: gameId, rating: out.black.rating, rd: out.black.rd, delta: out.black.rating - black.rating },
+  ]).then(({ error }) => { if (error) console.warn('[rating_history]', error.message); });
+
+  return {
+    mode,
+    white: {
+      userId: whiteId,
+      old: white.rating,
+      new: out.white.rating,
+      delta: out.white.rating - white.rating,
+      rd: out.white.rd,
+      provisional: rating.isProvisional(out.white.rd),
+    },
+    black: {
+      userId: blackId,
+      old: black.rating,
+      new: out.black.rating,
+      delta: out.black.rating - black.rating,
+      rd: out.black.rd,
+      provisional: rating.isProvisional(out.black.rd),
+    },
+  };
+}
+
 module.exports = {
   createGame,
   appendMove,
@@ -193,4 +271,5 @@ module.exports = {
   getAnalysis,
   enqueueAnalysis,
   deleteAnalysis,
+  applyRatingForGame,
 };

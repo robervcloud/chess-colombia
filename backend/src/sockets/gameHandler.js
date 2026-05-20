@@ -197,6 +197,22 @@ async function endGame(io, gameId, { winner, termination }) {
     blackMs: state.blackMs ?? 0,
   });
 
+  // Glicko-2 — sólo en partidas humano vs humano (bots no afectan rating).
+  if (!state.isBotGame) {
+    try {
+      const rt = await gameService.applyRatingForGame({
+        whiteId: state.white.userId,
+        blackId: state.black.userId,
+        result,
+        timeControl: state.timeControl,
+        gameId,
+      });
+      if (rt) io.to(`game:${gameId}`).emit('rating:update', rt);
+    } catch (err) {
+      console.error('[endGame] rating no aplicado:', err);
+    }
+  }
+
   if (state.flagTimer) clearTimeout(state.flagTimer);
   if (state.abandonTimer) clearTimeout(state.abandonTimer);
   userToGame.delete(state.white.userId);
