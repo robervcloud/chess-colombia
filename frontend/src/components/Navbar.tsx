@@ -47,6 +47,14 @@ export default function Navbar() {
                 Tácticas
               </Link>
               <Link
+                href="/analyze"
+                className={`text-sm font-medium hover:text-accent transition ${
+                  pathname?.startsWith('/analyze') ? 'text-accent' : 'text-wood-800'
+                }`}
+              >
+                Analizar
+              </Link>
+              <Link
                 href="/history"
                 className={`text-sm font-medium hover:text-accent transition ${
                   pathname?.startsWith('/history') ? 'text-accent' : 'text-wood-800'

@@ -276,8 +276,88 @@ function LobbyInner() {
           </div>
         )}
       </div>
+
+      <RecentGames />
     </section>
   );
+}
+
+/* ====== Partidas recientes ====== */
+function RecentGames() {
+  const router = useRouter();
+  const [items, setItems] = useState<any[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api<{ games: any[] }>('/api/games/recent')
+      .then((r) => { if (!cancelled) setItems(r.games); })
+      .catch(() => { if (!cancelled) setItems([]); });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (items === null) return (
+    <div className="mt-10 h-24 rounded-xl bg-wood-50/40 animate-pulse" />
+  );
+  if (items.length === 0) return null;
+
+  return (
+    <div className="mt-12">
+      <div className="flex items-baseline justify-between mb-3">
+        <h3 className="font-display text-lg">Partidas recientes</h3>
+        <a href="/history" className="text-xs uppercase tracking-wider text-wood-600 hover:text-accent">Ver todas →</a>
+      </div>
+      <div className="grid sm:grid-cols-2 gap-3">
+        {items.map((g) => (
+          <button
+            key={g.id}
+            onClick={() => router.push(`/game/${g.id}/analysis`)}
+            className="text-left card-premium p-4 hover-lift group transition-all"
+            style={{ backdropFilter: 'saturate(115%)' }}
+          >
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <span className={`text-[10px] uppercase tracking-widest font-medium ${
+                g.iWon === true  ? 'text-accent'
+                : g.iWon === false ? 'text-danger'
+                : 'text-wood-500'
+              }`}>
+                {g.iWon === true ? 'Victoria' : g.iWon === false ? 'Derrota' : 'Tablas'}
+              </span>
+              <span className="text-[10px] text-wood-500 tabular-nums">{g.timeControl}</span>
+            </div>
+            <div className="font-display text-base text-ink mb-1 truncate">
+              vs <span className="font-medium">{g.opponent}</span>
+            </div>
+            <div className="flex items-center justify-between text-[11px] text-wood-600">
+              <span className="truncate">{g.openingHint || '—'}</span>
+              {g.myAccuracy != null && (
+                <span className="tabular-nums shrink-0 ml-2">
+                  <span className="text-wood-400">precisión</span> {g.myAccuracy}%
+                </span>
+              )}
+            </div>
+            <div className="mt-2 flex items-center justify-between">
+              <span className="text-[10px] text-wood-400">{relTime(g.endedAt)}</span>
+              <span className="text-[10px] uppercase tracking-wider text-gold opacity-0 group-hover:opacity-100 transition-opacity">
+                Revisar →
+              </span>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function relTime(iso: string) {
+  if (!iso) return '';
+  const d = new Date(iso).getTime();
+  const diff = Date.now() - d;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'ahora';
+  if (mins < 60) return `hace ${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `hace ${hrs}h`;
+  const days = Math.floor(hrs / 24);
+  return `hace ${days}d`;
 }
 
 export default function LobbyPage() {
