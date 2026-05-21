@@ -8,13 +8,16 @@ module.exports = {
         ink:    '#1a1612',
         parch:  '#f5efe6',
         wood: {
-          50:  '#f8f1e3',
-          100: '#ecdfc1',
-          200: '#d8c094',
-          400: '#a87c4f',
-          600: '#6e4a26',
-          800: '#3a2716',
-        },
+        50:  '#f8f4ee',
+        100: '#efe5d3',
+        200: '#ddc6a2',
+        300: '#c7a06e',
+        400: '#b07f4f',
+        500: '#94633a',
+        600: '#7a532d',
+        700: '#6e4a26',
+        800: '#5a3d20',
+      },
         accent: {
           DEFAULT: '#1f7a5a', // verde esmeralda profundo
           light:   '#2da97f',
