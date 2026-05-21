@@ -44,6 +44,25 @@ function AnalyzeInner() {
   const [lines, setLines] = useState<any[]>([]);   // top N (SfInfo[])
   const [analyzing, setAnalyzing] = useState(false);
 
+  // ---- Estado de REVIEW (loop secuencial sobre el PGN completo) ----
+  // Cuando reviewActive===true, deshabilitamos el análisis live para no
+  // pisar al loop. Cuando termina o se cancela, vuelve a live.
+  interface ReviewMove {
+    ply: number;
+    san: string;
+    color: 'w' | 'b';
+    fenAfter: string;
+    cp: number | null;     // POV blancas
+    mate: number | null;   // POV blancas
+    bestUci: string | null;
+    depth: number;
+  }
+  const [reviewActive, setReviewActive]   = useState(false);
+  const [reviewProgress, setReviewProgress] = useState<{ cur: number; total: number }>({ cur: 0, total: 0 });
+  const [reviewMoves, setReviewMoves]     = useState<ReviewMove[]>([]);
+  const [reviewError, setReviewError]     = useState<string | null>(null);
+  const reviewAbortRef                    = useRef<AbortController | null>(null);
+
   // ---- Cargar Stockfish on-demand (sólo en esta página) ----
   useEffect(() => {
     let cancelled = false;
@@ -53,7 +72,8 @@ function AnalyzeInner() {
         const mod = await import('@/lib/stockfishClient');
         const sf = await mod.createStockfish();
         if (cancelled) { sf.destroy(); return; }
-        sf.onInfo((info) => setLines(info));
+        sf.onInfo((info: any) => setLines(info));
+        sf.onError((err: string) => setSfError(err));
         sfRef.current = sf;
         handle = sf;
         setSfReady(true);
@@ -78,18 +98,19 @@ function AnalyzeInner() {
     return c.fen();
   }, [historySan, ply]);
 
-  // ---- Disparar análisis cuando cambia la posición ----
+  // ---- Disparar análisis cuando cambia la posición (modo LIVE) ----
+  // Se DESACTIVA si está corriendo el review loop, para no pisar
+  // el motor con dos requests concurrentes sobre el mismo Worker.
   useEffect(() => {
     const sf = sfRef.current;
     if (!sf || !sfReady) return;
+    if (reviewActive) return; // el loop maneja el motor
     setLines([]);
     setAnalyzing(true);
     sf.setPosition(fen);
-    sf.analyze({ depth: 18, multipv: 3 });
-    // No "stop" manual: cuando llegue la próxima posición, setPosition
-    // ya ejecuta `stop` antes de cambiar.
+    sf.analyze({ depth: 16, multipv: 3 });
     return () => { setAnalyzing(false); };
-  }, [fen, sfReady]);
+  }, [fen, sfReady, reviewActive]);
 
   // ---- Movimientos del usuario ----
   function onDrop(from: string, to: string): boolean {
@@ -108,9 +129,12 @@ function AnalyzeInner() {
     return true;
   }
 
-  // ---- PGN paste ----
+  // ---- PGN paste: SÓLO carga las jugadas. El usuario después
+  // dispara el loop con "Analizar partida" (startReview). ----
   function loadPgn() {
     setPgnError(null);
+    setReviewError(null);
+    setReviewMoves([]);
     try {
       const c = new Chess();
       c.loadPgn(pgnInput.trim());
@@ -125,6 +149,88 @@ function AnalyzeInner() {
       setPgnError('PGN inválido. Verificá el formato.');
     }
   }
+
+  /**
+   * Loop secuencial: analiza cada posición del PGN, una a una, con
+   * timeout por posición y AbortSignal global. Emite progress + eval
+   * por jugada en tiempo real.
+   *
+   * Resuelve el bug "analizando infinitamente": ahora hay timeout duro
+   * por posición (15s) y el loop se puede cancelar.
+   */
+  async function startReview() {
+    const sf = sfRef.current;
+    if (!sf || !sfReady) {
+      setReviewError('Stockfish todavía no está listo.');
+      return;
+    }
+    if (historySan.length === 0) {
+      setReviewError('Cargá un PGN primero.');
+      return;
+    }
+    setReviewError(null);
+    setReviewMoves([]);
+    setReviewProgress({ cur: 0, total: historySan.length });
+    setReviewActive(true);
+
+    const abort = new AbortController();
+    reviewAbortRef.current = abort;
+    // eslint-disable-next-line no-console
+    if (process.env.NODE_ENV !== 'production') console.log('[review] start', historySan.length, 'plies');
+
+    const c = new Chess();
+    const collected: ReviewMove[] = [];
+
+    try {
+      for (let i = 0; i < historySan.length; i++) {
+        if (abort.signal.aborted) break;
+        const san = historySan[i];
+        const color: 'w' | 'b' = c.turn();
+        const fenBefore = c.fen();
+        let mv;
+        try { mv = c.move(san); } catch { mv = null; }
+        if (!mv) {
+          collected.push({ ply: i + 1, san, color, fenAfter: fenBefore, cp: null, mate: null, bestUci: null, depth: 0 });
+          continue;
+        }
+
+        try {
+          const info = await sf.analyzeOne(c.fen(), { depth: 12, multipv: 3, signal: abort.signal, timeoutMs: 15_000 });
+          const top = info.find((l: any) => l.multipv === 1) || info[0] || null;
+          // El score llega POV side-to-move (el de DESPUÉS de mv). Flip a POV blancas.
+          const sideAfter = c.turn(); // turno del rival
+          const sign = sideAfter === 'w' ? 1 : -1;
+          const cp   = top?.cp   != null ? top.cp   * sign : null;
+          const mate = top?.mate != null ? top.mate * sign : null;
+          const bestUci = top?.pv?.[0] || null;
+          const m: ReviewMove = { ply: i + 1, san, color, fenAfter: c.fen(), cp, mate, bestUci, depth: top?.depth ?? 0 };
+          collected.push(m);
+          setReviewMoves([...collected]);
+          setReviewProgress({ cur: i + 1, total: historySan.length });
+        } catch (err: any) {
+          if (err?.message === 'aborted') break;
+          // Posición con timeout: registrar sin eval y continuar.
+          collected.push({ ply: i + 1, san, color, fenAfter: c.fen(), cp: null, mate: null, bestUci: null, depth: 0 });
+          setReviewMoves([...collected]);
+          setReviewProgress({ cur: i + 1, total: historySan.length });
+        }
+      }
+      if (process.env.NODE_ENV !== 'production') console.log('[review] done', collected.length);
+    } finally {
+      setReviewActive(false);
+      reviewAbortRef.current = null;
+    }
+  }
+
+  function cancelReview() {
+    reviewAbortRef.current?.abort();
+    if (process.env.NODE_ENV !== 'production') console.log('[review] cancel');
+  }
+
+  // Cleanup abort al desmontar
+  useEffect(() => {
+    return () => { reviewAbortRef.current?.abort(); };
+  }, []);
 
   // ---- Reset al inicio ----
   function reset() {
@@ -281,18 +387,63 @@ function AnalyzeInner() {
                 value={pgnInput}
                 onChange={(e) => setPgnInput(e.target.value)}
                 placeholder={'[Event "..."]\n\n1. e4 e5 2. Nf3 Nc6 ...'}
-                rows={6}
-                className="w-full text-sm font-mono px-3 py-2 rounded-md border border-wood-200 bg-white focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
+                rows={5}
+                disabled={reviewActive}
+                className="w-full text-sm font-mono px-3 py-2 rounded-md border border-wood-200 bg-white focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all disabled:opacity-60"
               />
               {pgnError && <p className="text-xs text-danger mt-2">{pgnError}</p>}
+              {reviewError && <p className="text-xs text-danger mt-2">{reviewError}</p>}
+
               <div className="flex gap-2 mt-3">
-                <button className="btn-primary" onClick={loadPgn} disabled={!pgnInput.trim()}>
-                  Analizar partida
+                <button
+                  className="btn-ghost"
+                  onClick={loadPgn}
+                  disabled={!pgnInput.trim() || reviewActive}
+                >
+                  Cargar partida
                 </button>
-                <button className="btn-ghost" onClick={() => { setPgnInput(''); setPgnError(null); }}>
-                  Borrar
-                </button>
+                {!reviewActive ? (
+                  <button
+                    className="btn-primary"
+                    onClick={startReview}
+                    disabled={historySan.length === 0 || !sfReady}
+                    title={!sfReady ? 'Esperando motor…' : 'Analizar todas las jugadas'}
+                  >
+                    Analizar partida
+                  </button>
+                ) : (
+                  <button className="btn-danger" onClick={cancelReview}>
+                    Cancelar
+                  </button>
+                )}
               </div>
+
+              {/* Progress real durante review */}
+              {(reviewActive || reviewMoves.length > 0) && (
+                <div className="mt-4 animate-fadeIn">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] uppercase tracking-widest text-gold">
+                      {reviewActive ? 'Analizando…' : 'Análisis completo'}
+                    </span>
+                    <span className="text-xs tabular-nums text-wood-600">
+                      {reviewProgress.cur} / {reviewProgress.total}
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-wood-100 overflow-hidden ring-1 ring-wood-200/40">
+                    <div
+                      className="h-full transition-[width] duration-300 ease-out"
+                      style={{
+                        width: `${reviewProgress.total > 0 ? Math.round((reviewProgress.cur / reviewProgress.total) * 100) : 0}%`,
+                        background: 'linear-gradient(90deg, #c9a24a 0%, #e8c873 50%, #c9a24a 100%)',
+                        boxShadow: '0 0 8px rgba(232,200,115,0.4)',
+                      }}
+                    />
+                  </div>
+                  {reviewMoves.length > 0 && (
+                    <EvalGraph moves={reviewMoves} total={historySan.length} onSelect={(p) => setPly(p)} active={ply} />
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -429,5 +580,68 @@ export default function AnalyzePage() {
     <AuthGuard>
       <AnalyzeInner />
     </AuthGuard>
+  );
+}
+
+/**
+ * EvalGraph: gráfico de evaluación parcial mientras corre el review.
+ * SVG inline, sin librerías. Eje X = ply, eje Y = eval clamped a ±8.
+ * Click en un ply → navega.
+ */
+function EvalGraph({ moves, total, onSelect, active }: {
+  moves: Array<{ ply: number; cp: number | null; mate: number | null }>;
+  total: number;
+  onSelect: (ply: number) => void;
+  active: number;
+}) {
+  const W = 280, H = 64;
+  const clampCp = (cp: number | null, mate: number | null): number => {
+    if (mate != null) return mate > 0 ? 800 : -800;
+    if (cp == null)   return 0;
+    return Math.max(-800, Math.min(800, cp));
+  };
+  const xs = (p: number) => (p / Math.max(1, total)) * W;
+  const ys = (cp: number) => H / 2 - (cp / 800) * (H / 2 - 4);
+
+  // Polígono de relleno: sigue la línea, cierra al eje 0
+  const pts: string[] = ['0,' + (H / 2)];
+  moves.forEach((m) => pts.push(`${xs(m.ply).toFixed(1)},${ys(clampCp(m.cp, m.mate)).toFixed(1)}`));
+  pts.push(`${xs(moves[moves.length - 1]?.ply || 0).toFixed(1)},${H / 2}`);
+  const poly = pts.join(' ');
+
+  return (
+    <div className="mt-3">
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full h-16 cursor-pointer"
+        preserveAspectRatio="none"
+        onClick={(e) => {
+          const rect = (e.target as SVGElement).getBoundingClientRect();
+          const px = e.clientX - rect.left;
+          const p = Math.round((px / rect.width) * total);
+          onSelect(Math.max(0, Math.min(total, p)));
+        }}
+      >
+        <defs>
+          <linearGradient id="evalfill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%"   stopColor="#1f7a5a" stopOpacity="0.25" />
+            <stop offset="50%"  stopColor="#c9a24a" stopOpacity="0.1"  />
+            <stop offset="100%" stopColor="#b3392c" stopOpacity="0.25" />
+          </linearGradient>
+        </defs>
+        {/* línea cero */}
+        <line x1="0" y1={H / 2} x2={W} y2={H / 2} stroke="#d8c094" strokeWidth="0.5" strokeDasharray="2 2" />
+        <polygon points={poly} fill="url(#evalfill)" stroke="#6e4a26" strokeWidth="1" />
+        {/* indicador del ply activo */}
+        {active > 0 && active <= total && (
+          <line
+            x1={xs(active)} x2={xs(active)} y1={0} y2={H}
+            stroke="#c9a24a" strokeWidth="1.5"
+            style={{ filter: 'drop-shadow(0 0 4px rgba(201,162,74,0.6))' }}
+          />
+        )}
+      </svg>
+      <p className="text-[10px] text-wood-500 mt-1">Click en el gráfico para navegar</p>
+    </div>
   );
 }
