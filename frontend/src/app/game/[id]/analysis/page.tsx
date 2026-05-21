@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { Chess } from 'chess.js';
@@ -9,8 +9,11 @@ import AuthGuard from '@/components/AuthGuard';
 import EvalBar from '@/components/EvalBar';
 import MoveList from '@/components/MoveList';
 import EngineLines from '@/components/EngineLines';
+import { MoveBadge } from '@/components/MoveBadge';
+import { ReviewSummary } from '@/components/ReviewSummary';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { gamePhase, humanExplanation, type Phase } from '@/lib/moveClassification';
 import type { GameAnalysis, MoveAnalysis } from '@/types/analysis';
 
 const ChessBoard = dynamic(
@@ -83,18 +86,6 @@ function AnalysisInner() {
     return () => { cancelled = true; if (pollRef.current) window.clearTimeout(pollRef.current); };
   }, [gameId]);
 
-  // Cleanup en navegación
-  useEffect(() => {
-    return () => {
-      // best-effort: borrar el análisis temporal del servidor (TTL)
-      fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/api/games/${gameId}/analysis`, {
-        method: 'DELETE',
-        keepalive: true,
-        headers: { Authorization: `Bearer ${typeof window !== 'undefined' ? window.localStorage.getItem('chess_co_token') : ''}` },
-      }).catch(() => {});
-    };
-  }, [gameId]);
-
   const moves: MoveAnalysis[] = data?.analysis?.moves_analysis || [];
   const totalPlies = moves.length;
   const status = data?.analysis?.status;
@@ -102,8 +93,7 @@ function AnalysisInner() {
   // Auto-follow durante streaming
   useEffect(() => {
     if (selectedPly > totalPlies) { setSelectedPly(totalPlies); return; }
-    const isStreaming = status === 'running';
-    if (isStreaming && !userTouchedNavRef.current && totalPlies > 0) {
+    if (status === 'running' && !userTouchedNavRef.current && totalPlies > 0) {
       setSelectedPly(totalPlies);
     }
   }, [totalPlies, status, selectedPly]);
@@ -133,7 +123,19 @@ function AnalysisInner() {
     return () => window.removeEventListener('resize', resize);
   }, []);
 
-  // Posición a mostrar (review)
+  // ReviewMove[] derivado para alimentar ReviewSummary y MoveList con phase + cpLoss
+  // Es un MAP O(n) sobre moves cuando cambia el array (memoizado).
+  const reviewMovesForSummary = useMemo(() => {
+    return moves.map((m, i) => ({
+      ply: m.ply,
+      san: m.san,
+      color: m.color,
+      classification: m.classification,
+      cpLoss: m.centipawnLoss,
+      phase: gamePhase(i, m.fenAfter) as Phase,
+    }));
+  }, [moves]);
+
   const { fen, currentMove, evalCp, evalMate, currentLines, bestMoveSan, bestMoveUci } = useMemo(() => {
     if (selectedPly === 0 || moves.length === 0) {
       return {
@@ -158,18 +160,26 @@ function AnalysisInner() {
     };
   }, [moves, selectedPly]);
 
-  // Flechas: la jugada real (verde/rojo) + sugerencia dorada si difiere
+  // Flechas: jugada real (verde si buena, terracota si mala) + sugerencia dorada
   const customArrows = useMemo<Array<[Square, Square, string]>>(() => {
     const arr: Array<[Square, Square, string]> = [];
     if (currentMove && currentMove.uci && currentMove.uci.length >= 4) {
-      const isOk = currentMove.classification === 'best' || currentMove.classification === 'excellent';
+      const k = currentMove.classification;
+      const isGreat = k === 'brilliant' || k === 'great' || k === 'best' || k === 'excellent';
+      const isBad   = k === 'mistake' || k === 'blunder';
+      const color = isGreat
+        ? 'rgba(58,160,120,0.55)'
+        : isBad
+          ? 'rgba(160,90,70,0.55)'
+          : 'rgba(160,140,110,0.45)';
       arr.push([
         currentMove.uci.substring(0, 2) as Square,
         currentMove.uci.substring(2, 4) as Square,
-        isOk ? 'rgba(58,160,120,0.55)' : 'rgba(160,90,70,0.55)',
+        color,
       ]);
     }
-    if (bestMoveUci && bestMoveUci.length >= 4 && (!currentMove || currentMove.uci?.substring(0, 4) !== bestMoveUci.substring(0, 4))) {
+    if (bestMoveUci && bestMoveUci.length >= 4 &&
+        (!currentMove || currentMove.uci?.substring(0, 4) !== bestMoveUci.substring(0, 4))) {
       arr.push([
         bestMoveUci.substring(0, 2) as Square,
         bestMoveUci.substring(2, 4) as Square,
@@ -179,7 +189,7 @@ function AnalysisInner() {
     return arr;
   }, [currentMove, bestMoveUci]);
 
-  // ---- Modo exploración (variantes libres, sin afectar review) ----
+  // ---- Modo exploración (variantes libres, no toca review) ----
   const exploreChessRef = useRef<Chess | null>(null);
   const [exploreFen, setExploreFen] = useState<string | null>(null);
   const [exploreMoves, setExploreMoves] = useState<string[]>([]);
@@ -231,7 +241,6 @@ function AnalysisInner() {
     setExploreMoves((prev) => prev.slice(0, -1));
   }
 
-  // Quién es el usuario actual
   const myColor: 'w' | 'b' | null = !user || !data
     ? null
     : data.game.white_id === user.id ? 'w'
@@ -248,7 +257,6 @@ function AnalysisInner() {
     );
   }
 
-  // Pantalla de "pendiente" — sin parcial todavía
   if (!data.analysis || status === 'pending' || (status === 'running' && moves.length === 0)) {
     const cur = data.analysis?.progress_current ?? 0;
     const tot = data.analysis?.progress_total ?? 0;
@@ -301,12 +309,19 @@ function AnalysisInner() {
     );
   }
 
-  // === RENDER PRINCIPAL ===
   const isLive = status === 'running';
-  const summary = data.analysis.summary || computeQuickSummary(moves);
   const progressCur = data.analysis.progress_current ?? 0;
   const progressTot = data.analysis.progress_total ?? 0;
   const progressPct = progressTot > 0 ? Math.min(100, Math.round((progressCur / progressTot) * 100)) : 0;
+
+  // Explicación humana de la jugada actual (template-based, sin LLM)
+  const explanation = currentMove
+    ? humanExplanation({
+        classification: currentMove.classification,
+        cpLoss: currentMove.centipawnLoss,
+        color: currentMove.color,
+      })
+    : null;
 
   return (
     <section className="flex-1 max-w-7xl mx-auto w-full px-5 py-8">
@@ -318,7 +333,7 @@ function AnalysisInner() {
         </h1>
         <p className="text-wood-600 text-sm mt-1">
           {data.game.time_control} · resultado {data.game.result || '—'} ·{' '}
-          {summary.totalPlies} jugadas{!isLive && summary.truncated && ' (truncado)'}
+          {totalPlies} jugadas
         </p>
       </header>
 
@@ -331,7 +346,7 @@ function AnalysisInner() {
                 <span className="relative rounded-full h-2 w-2 bg-gold" />
               </span>
               <span className="text-xs uppercase tracking-[0.18em] text-gold font-medium">En vivo</span>
-              <span className="text-xs text-wood-600">Stockfish analizando</span>
+              <span className="text-xs text-wood-600">Stockfish analizando · clasificación en tiempo real</span>
             </div>
             <span className="text-xs tabular-nums text-wood-700">{progressPct}%</span>
           </div>
@@ -355,12 +370,12 @@ function AnalysisInner() {
       )}
 
       <div className="grid lg:grid-cols-[auto_1fr_320px] gap-5 items-start">
-        {/* Columna izquierda: eval bar + tablero */}
+        {/* Columna izquierda */}
         <div>
           <div className="flex gap-3">
             <EvalBar cp={evalCp} mate={evalMate} height={boardWidth} />
             <div>
-              <div className="my-2">
+              <div className="board-glow my-2">
                 <ChessBoard
                   position={exploring ? exploreFen! : (fen === 'start' ? undefined : fen)}
                   arePiecesDraggable={exploring}
@@ -380,7 +395,6 @@ function AnalysisInner() {
                 />
               </div>
 
-              {/* Control de exploración */}
               <div className="flex flex-wrap items-center gap-2 mb-2">
                 {!exploring ? (
                   <button
@@ -395,17 +409,12 @@ function AnalysisInner() {
                     <span className="text-[11px] uppercase tracking-widest text-gold animate-fadeIn">
                       Modo exploración
                     </span>
-                    <button
-                      onClick={undoExplore}
-                      disabled={exploreMoves.length === 0}
-                      className="px-3 py-1.5 rounded-lg text-xs uppercase tracking-wider border border-wood-200 bg-wood-50 text-wood-700 hover:text-ink disabled:opacity-40 transition-all"
-                    >
+                    <button onClick={undoExplore} disabled={exploreMoves.length === 0}
+                      className="px-3 py-1.5 rounded-lg text-xs uppercase tracking-wider border border-wood-200 bg-wood-50 text-wood-700 hover:text-ink disabled:opacity-40 transition-all">
                       ↶ Deshacer
                     </button>
-                    <button
-                      onClick={exitExplore}
-                      className="px-3 py-1.5 rounded-lg text-xs uppercase tracking-wider border border-wood-200 bg-wood-50 text-wood-700 hover:text-ink transition-all"
-                    >
+                    <button onClick={exitExplore}
+                      className="px-3 py-1.5 rounded-lg text-xs uppercase tracking-wider border border-wood-200 bg-wood-50 text-wood-700 hover:text-ink transition-all">
                       ⟲ Volver a la review
                     </button>
                     {exploreMoves.length > 0 && (
@@ -417,7 +426,6 @@ function AnalysisInner() {
                 )}
               </div>
 
-              {/* NavBar de plies */}
               <NavBar
                 ply={selectedPly}
                 total={totalPlies}
@@ -427,67 +435,83 @@ function AnalysisInner() {
           </div>
         </div>
 
-        {/* Columna media: motor */}
-        <aside className="card-premium p-5 w-full">
-          <h3 className="font-display text-lg mb-1">Motor</h3>
-          <p className="text-xs text-wood-500 mb-3">
-            {data.analysis.engine_name || 'stockfish'} · profundidad {data.analysis.engine_depth ?? '—'}
-          </p>
+        {/* Columna media: motor + jugada actual con MoveBadge premium */}
+        <aside className="space-y-4">
           {currentMove && (
-            <div className="mb-4 p-3 rounded-md border border-wood-100 bg-wood-50/50">
-              <p className="text-[10px] uppercase tracking-wider text-wood-500">
-                Jugada {Math.ceil(currentMove.ply / 2)}{currentMove.color === 'w' ? '.' : '...'}
-              </p>
-              <div className="flex items-baseline gap-2 mt-1">
-                <span className="font-display text-2xl">{currentMove.san}</span>
-                <ClassBadge k={currentMove.classification} />
+            <div className="card-premium p-5">
+              <div className="flex items-baseline justify-between gap-3 mb-3">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-wood-500">
+                    Jugada {Math.ceil(currentMove.ply / 2)}{currentMove.color === 'w' ? '.' : '...'}
+                  </p>
+                  <div className="font-display text-2xl mt-1">{currentMove.san}</div>
+                </div>
+                <MoveBadge k={currentMove.classification} variant="large" />
               </div>
               {bestMoveSan && bestMoveSan !== currentMove.san && (
-                <p className="text-xs text-wood-600 mt-1">
-                  Mejor: <span className="font-medium text-ink">{bestMoveSan}</span>
+                <p className="text-xs text-wood-600 mb-2">
+                  Mejor jugada: <span className="font-medium text-ink">{bestMoveSan}</span>
+                </p>
+              )}
+              {explanation && (
+                <p className="text-sm text-wood-700 leading-snug italic mt-2 border-l-2 border-gold/40 pl-3">
+                  {explanation}
                 </p>
               )}
             </div>
           )}
-          <EngineLines lines={currentLines} bestMoveSan={bestMoveSan} caption="Líneas principales" />
+
+          <div className="card-premium p-5">
+            <h3 className="font-display text-lg mb-1">Motor</h3>
+            <p className="text-xs text-wood-500 mb-3">
+              {data.analysis.engine_name || 'stockfish'} · profundidad {data.analysis.engine_depth ?? '—'}
+            </p>
+            <EngineLines lines={currentLines} bestMoveSan={bestMoveSan} caption="Líneas principales" />
+          </div>
         </aside>
 
-        {/* Columna derecha */}
-        <aside className="card-premium p-5 w-full lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto">
-          <h3 className="font-display text-lg mb-3">Jugadas</h3>
-          <div className="max-h-[40vh] lg:max-h-[36vh] overflow-y-auto pr-1">
-            <MoveList moves={moves} selectedPly={selectedPly} onSelect={(p) => { userTouchedNavRef.current = true; setSelectedPly(p); }} />
+        {/* Columna derecha: lista de jugadas + review summary */}
+        <aside className="space-y-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto">
+          <div className="card-premium p-5">
+            <h3 className="font-display text-lg mb-3">Jugadas</h3>
+            <div className="max-h-[40vh] lg:max-h-[36vh] overflow-y-auto pr-1">
+              <MoveList
+                moves={moves}
+                selectedPly={selectedPly}
+                onSelect={(p: number) => { userTouchedNavRef.current = true; setSelectedPly(p); }}
+              />
+            </div>
           </div>
 
-          <div className="divider-gold my-5" />
+          {/* ReviewSummary: timeline + distribución + breakdown por fase + peor error */}
+          <ReviewSummary
+            moves={reviewMovesForSummary}
+            myColor={myColor}
+            selectedPly={selectedPly}
+            onSelectPly={(p: number) => { userTouchedNavRef.current = true; setSelectedPly(p); }}
+          />
 
-          <h3 className="font-display text-lg mb-3">Resumen</h3>
-          <SummaryRow label="Precisión" wVal={fmtPct(summary.accuracyWhite)} bVal={fmtPct(summary.accuracyBlack)} />
-          <SummaryRow label="Mejores" wVal={summary.bestMovesWhite} bVal={summary.bestMovesBlack} />
-          <SummaryRow label="Imprecisiones" wVal={summary.inaccuraciesWhite} bVal={summary.inaccuraciesBlack} />
-          <SummaryRow label="Errores" wVal={summary.mistakesWhite} bVal={summary.mistakesBlack} />
-          <SummaryRow label="Blunders" wVal={summary.blundersWhite} bVal={summary.blundersBlack} klass="text-danger" />
-
-          <div className="divider-gold my-5" />
-
-          <div className="text-xs uppercase tracking-wider text-wood-500 mb-2">Elo estimado</div>
-          <div className="grid grid-cols-2 gap-3">
-            <EloPillEx
-              label={data.game.white_username}
-              value={data.analysis.elo_white}
-              confidence={data.analysis.elo_confidence_white}
-              reasons={data.analysis.elo_reasons_white}
-            />
-            <EloPillEx
-              label={data.game.black_username}
-              value={data.analysis.elo_black}
-              confidence={data.analysis.elo_confidence_black}
-              reasons={data.analysis.elo_reasons_black}
-            />
+          {/* Elo estimado pegado al fondo del panel */}
+          <div className="card-premium p-5">
+            <div className="text-xs uppercase tracking-wider text-wood-500 mb-2">Elo estimado</div>
+            <div className="grid grid-cols-2 gap-3">
+              <EloPillEx
+                label={data.game.white_username}
+                value={data.analysis.elo_white}
+                confidence={data.analysis.elo_confidence_white}
+                reasons={data.analysis.elo_reasons_white}
+              />
+              <EloPillEx
+                label={data.game.black_username}
+                value={data.analysis.elo_black}
+                confidence={data.analysis.elo_confidence_black}
+                reasons={data.analysis.elo_reasons_black}
+              />
+            </div>
+            <p className="text-[10px] text-wood-500 mt-2 italic">
+              Estimación del nivel de juego, no Elo oficial.
+            </p>
           </div>
-          <p className="text-[10px] text-wood-500 mt-2 italic">
-            Estimación del nivel de juego, no Elo oficial.
-          </p>
         </aside>
       </div>
     </section>
@@ -501,32 +525,11 @@ function Centered({ children }: { children: React.ReactNode }) {
 function NavBar({ ply, total, onChange }: { ply: number; total: number; onChange: (p: number) => void }) {
   return (
     <div className="flex items-center gap-2 my-3">
-      <button onClick={() => onChange(0)}                   className="btn-ghost px-2 py-1 text-sm" title="Inicio">⏮</button>
-      <button onClick={() => onChange(Math.max(0, ply-1))}  className="btn-ghost px-2 py-1 text-sm" title="Atrás">◀</button>
+      <button onClick={() => onChange(0)}                     className="btn-ghost px-2 py-1 text-sm" title="Inicio">⏮</button>
+      <button onClick={() => onChange(Math.max(0, ply-1))}    className="btn-ghost px-2 py-1 text-sm" title="Atrás">◀</button>
       <span className="text-xs tabular-nums text-wood-600 min-w-[60px] text-center">{ply} / {total}</span>
       <button onClick={() => onChange(Math.min(total, ply+1))} className="btn-ghost px-2 py-1 text-sm" title="Adelante">▶</button>
-      <button onClick={() => onChange(total)}               className="btn-ghost px-2 py-1 text-sm" title="Fin">⏭</button>
-    </div>
-  );
-}
-function ClassBadge({ k }: { k: string }) {
-  const map: Record<string, { label: string; cls: string }> = {
-    best:       { label: 'Mejor',       cls: 'bg-accent/15 text-accent border-accent/30' },
-    excellent:  { label: 'Excelente',   cls: 'bg-accent/10 text-accent border-accent/20' },
-    good:       { label: 'Buena',       cls: 'bg-wood-100 text-wood-700 border-wood-200' },
-    inaccuracy: { label: 'Imprecisión', cls: 'bg-gold/15 text-wood-700 border-gold/30' },
-    mistake:    { label: 'Error',       cls: 'bg-clay/15 text-clay border-clay/30' },
-    blunder:    { label: 'Blunder',     cls: 'bg-danger/15 text-danger border-danger/30' },
-  };
-  const it = map[k] || map.good;
-  return <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded border ${it.cls}`}>{it.label}</span>;
-}
-function SummaryRow({ label, wVal, bVal, klass }: { label: string; wVal: any; bVal: any; klass?: string }) {
-  return (
-    <div className="grid grid-cols-3 gap-2 py-1 text-sm">
-      <span className="text-wood-600">{label}</span>
-      <span className={`text-right tabular-nums ${klass || ''}`}>{wVal ?? '—'}</span>
-      <span className={`text-right tabular-nums ${klass || ''}`}>{bVal ?? '—'}</span>
+      <button onClick={() => onChange(total)}                  className="btn-ghost px-2 py-1 text-sm" title="Fin">⏭</button>
     </div>
   );
 }
@@ -556,20 +559,6 @@ function EloPillEx({ label, value, confidence, reasons }: {
       )}
     </div>
   );
-}
-function fmtPct(v: number | null) { return v === null ? null : `${v}%`; }
-function computeQuickSummary(moves: any[]): any {
-  const w = moves.filter((m) => m.color === 'w');
-  const b = moves.filter((m) => m.color === 'b');
-  const cnt = (arr: any[], c: string) => arr.filter((x) => x.classification === c).length;
-  return {
-    accuracyWhite: null, accuracyBlack: null,
-    blundersWhite: cnt(w, 'blunder'),     blundersBlack: cnt(b, 'blunder'),
-    mistakesWhite: cnt(w, 'mistake'),     mistakesBlack: cnt(b, 'mistake'),
-    inaccuraciesWhite: cnt(w, 'inaccuracy'), inaccuraciesBlack: cnt(b, 'inaccuracy'),
-    bestMovesWhite: cnt(w, 'best'),       bestMovesBlack: cnt(b, 'best'),
-    totalPlies: moves.length, truncated: false,
-  };
 }
 
 export default function AnalysisPage() {

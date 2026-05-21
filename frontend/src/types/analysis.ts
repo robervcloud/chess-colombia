@@ -6,9 +6,12 @@
  */
 
 export type Classification =
+  | 'brilliant'
+  | 'great'
   | 'best'
   | 'excellent'
   | 'good'
+  | 'book'
   | 'inaccuracy'
   | 'mistake'
   | 'blunder';

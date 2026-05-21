@@ -1,6 +1,7 @@
 'use client';
 
-import type { MoveAnalysis, Classification } from '@/types/analysis';
+import { MoveBadge } from '@/components/MoveBadge';
+import type { MoveAnalysis } from '@/types/analysis';
 
 interface Props {
   moves: MoveAnalysis[];
@@ -8,24 +9,14 @@ interface Props {
   onSelect: (ply: number) => void;
 }
 
-const KLASS_LABEL: Record<Classification, string> = {
-  best: '✓',
-  excellent: '★',
-  good: '·',
-  inaccuracy: '?!',
-  mistake: '?',
-  blunder: '??',
-};
-
-const KLASS_COLOR: Record<Classification, string> = {
-  best:        'text-accent-light',
-  excellent:   'text-gold',
-  good:        'text-wood-400',
-  inaccuracy:  'text-clay-light',
-  mistake:     'text-clay',
-  blunder:     'text-danger',
-};
-
+/**
+ * Lista de jugadas pareada en formato PGN.
+ *
+ * Usa `MoveBadge` variante 'icon' para mostrar la calidad de cada
+ * jugada de forma compacta (símbolo a la izquierda del SAN). Soporta
+ * los 9 niveles de Classification, incluido book/brilliant/great que
+ * faltaban en la versión previa.
+ */
 export default function MoveList({ moves, selectedPly, onSelect }: Props) {
   // Agrupamos en pares (white, black) por número de jugada
   const rows: { num: number; w?: MoveAnalysis; b?: MoveAnalysis }[] = [];
@@ -41,10 +32,18 @@ export default function MoveList({ moves, selectedPly, onSelect }: Props) {
   }
 
   return (
-    <div className="overflow-y-auto max-h-[420px] pr-1 -mr-1 text-sm">
+    <div className="overflow-y-auto pr-1 -mr-1 text-sm">
+      {rows.length === 0 && (
+        <p className="text-xs text-wood-500 italic px-1 py-2">Sin jugadas aún…</p>
+      )}
       {rows.map((r) => (
-        <div key={r.num} className="grid grid-cols-[2.5rem_1fr_1fr] gap-1 items-baseline py-0.5">
-          <div className="text-wood-400 tabular-nums text-right pr-1">{r.num}.</div>
+        <div
+          key={r.num}
+          className="grid grid-cols-[2.5rem_1fr_1fr] gap-1 items-baseline py-0.5"
+        >
+          <div className="text-wood-400 tabular-nums text-right pr-1 text-xs">
+            {r.num}.
+          </div>
           <MoveCell move={r.w} selected={r.w?.ply === selectedPly} onSelect={onSelect} />
           <MoveCell move={r.b} selected={r.b?.ply === selectedPly} onSelect={onSelect} />
         </div>
@@ -63,20 +62,23 @@ function MoveCell({
   onSelect: (ply: number) => void;
 }) {
   if (!move) return <div />;
+  const k = move.classification;
+  const notable = k === 'brilliant' || k === 'great' || k === 'blunder';
   return (
     <button
       onClick={() => onSelect(move.ply)}
       className={[
-        'flex items-baseline gap-1.5 px-2 py-0.5 rounded text-left transition-colors',
+        'flex items-baseline gap-1.5 px-2 py-0.5 rounded text-left',
+        'transition-all duration-150 ease-out',
         'hover:bg-wood-50',
-        selected ? 'bg-wood-100 text-ink font-semibold' : 'text-wood-800',
+        selected
+          ? 'bg-wood-100 text-ink font-semibold ring-1 ring-gold/40 shadow-sm'
+          : 'text-wood-800',
       ].join(' ')}
-      title={move.classification}
+      title={`${move.san} · ${k}`}
     >
-      <span className={`text-xs font-bold ${KLASS_COLOR[move.classification]}`}>
-        {KLASS_LABEL[move.classification]}
-      </span>
-      <span>{move.san}</span>
+      <MoveBadge k={k} variant="icon" />
+      <span className={notable ? 'font-medium' : ''}>{move.san}</span>
     </button>
   );
 }
