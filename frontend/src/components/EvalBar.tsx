@@ -3,8 +3,9 @@
 /**
  * Barra de evaluación vertical estilo Lichess/Chess.com.
  * - Recibe `cp` (centipawns, POV blancas) o `mate` (POV blancas).
- * - Muestra blanco abajo, negro arriba, y un texto numérico.
- * - Suaviza el cambio con CSS transition.
+ * - Muestra blanco abajo, negro arriba, y un texto numérico legible.
+ * - Suaviza el cambio con CSS transition de 500ms.
+ * - Glow cálido cuando hay mate (visual viva al estilo Chess.com).
  */
 
 interface Props {
@@ -13,10 +14,9 @@ interface Props {
   height?: number;     // px
 }
 
-const MAX_CP = 1000; // a partir de aquí saturamos visualmente
+const MAX_CP = 1000;
 
 export default function EvalBar({ cp, mate, height = 480 }: Props) {
-  // Calcular % de blancas (0..100) usando una sigmoide suave
   const whiteShare = (() => {
     if (mate !== null && mate !== undefined) {
       return mate > 0 ? 100 : 0;
@@ -37,27 +37,48 @@ export default function EvalBar({ cp, mate, height = 480 }: Props) {
   })();
 
   const labelOnTop = whiteShare < 50;
+  const isMate = mate !== null && mate !== undefined;
 
   return (
     <div
-      className="relative w-6 rounded-md overflow-hidden border border-wood-200 shadow-soft bg-wood-800 select-none"
+      className={[
+        'relative w-7 rounded-md overflow-hidden border select-none',
+        isMate ? 'border-gold/60 eval-mate' : 'border-wood-200 shadow-soft',
+        'bg-wood-800',
+      ].join(' ')}
       style={{ height }}
       aria-label={`Evaluación: ${label}`}
       title={`Evaluación: ${label}`}
     >
-      {/* Parte blanca (abajo) */}
+      {/* Parte blanca (abajo) con gradient cálido sutil */}
       <div
-        className="absolute bottom-0 left-0 right-0 bg-parch transition-all duration-500 ease-out"
-        style={{ height: `${whiteShare}%` }}
+        className="absolute bottom-0 left-0 right-0 transition-all duration-500 ease-out"
+        style={{
+          height: `${whiteShare}%`,
+          background: 'linear-gradient(180deg, #faf4e6 0%, #f5efe6 100%)',
+        }}
       />
-      {/* Línea media */}
-      <div className="absolute left-0 right-0 h-px bg-gold/50" style={{ bottom: '50%' }} />
-      {/* Etiqueta numérica */}
+      {/* Línea media — dorada con glow sutil */}
+      <div
+        className="absolute left-0 right-0"
+        style={{
+          bottom: '50%',
+          height: '1px',
+          background: 'rgba(201, 162, 74, 0.55)',
+          boxShadow: '0 0 4px rgba(201, 162, 74, 0.5)',
+        }}
+      />
+      {/* Etiqueta numérica con sombra cálida para legibilidad */}
       <div
         className={[
-          'absolute left-0 right-0 text-[10px] font-semibold tabular-nums text-center',
-          labelOnTop ? 'top-1 text-parch' : 'bottom-1 text-ink',
+          'absolute left-0 right-0 text-[11px] font-semibold tabular-nums text-center',
+          labelOnTop ? 'top-1.5 text-parch' : 'bottom-1.5 text-ink',
         ].join(' ')}
+        style={{
+          textShadow: labelOnTop
+            ? '0 1px 2px rgba(0,0,0,0.4)'
+            : '0 1px 2px rgba(255,255,255,0.6)',
+        }}
       >
         {label}
       </div>

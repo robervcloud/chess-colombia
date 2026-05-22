@@ -375,13 +375,13 @@ function AnalysisInner() {
         </div>
       )}
 
-      <div className="grid lg:grid-cols-[auto_1fr_320px] gap-5 items-start">
+      <div className="review-grid">
         {/* Columna izquierda */}
         <div>
           <div className="flex gap-3">
             <EvalBar cp={evalCp} mate={evalMate} height={boardWidth} />
             <div>
-              <div className="board-glow my-2">
+              <div className="review-board my-2">
                 <ChessBoard
                   position={exploring ? exploreFen! : (fen === 'start' ? undefined : fen)}
                   arePiecesDraggable={exploring}

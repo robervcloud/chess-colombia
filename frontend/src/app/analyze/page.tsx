@@ -249,14 +249,13 @@ function AnalyzeInner() {
           const matchedBest = !!(uciPlayed && prevBestUci && uciPlayed.slice(0, 4) === prevBestUci.slice(0, 4));
           // Material sacrificado para detectar brilliancies
           const materialSac = uciPlayed ? estimateMaterialSacrificed(fenBefore, uciPlayed) : 0;
-          // SwungToLosing: estabamos ganando (≥+150 POV jugador) y ahora perdemos (≤-50)   
+          // SwungToLosing: estabamos ganando (≥+150 POV jugador) y ahora perdemos (≤-50)
           const prevPlayerEval: number | null = prevEvalCp == null
             ? null
             : (color === 'w' ? prevEvalCp : -prevEvalCp);
           const newPlayerEval: number | null  = cp != null
             ? (color === 'w' ? cp : -cp)
-            : null;  
-          
+            : null;
           const swung = prevPlayerEval != null && prevPlayerEval >= 150 &&
                         newPlayerEval  != null && newPlayerEval  <= -50;
 
@@ -423,7 +422,7 @@ function AnalyzeInner() {
         </div>
       )}
 
-      <div className="grid lg:grid-cols-[auto_1fr] gap-5 items-start">
+      <div className="review-grid">
         {/* Columna izquierda: eval + tablero */}
         <div className="flex gap-3">
           <EvalBar cp={evalCp} mate={evalMate} height={boardWidth} />
@@ -441,7 +440,7 @@ function AnalyzeInner() {
                 )}
               </div>
             )}
-            <div className="board-glow my-2">
+            <div className="review-board my-2">
               <Chessboard
                 position={fen}
                 onPieceDrop={(s: string, t: string) => onDrop(s, t)}
@@ -480,7 +479,7 @@ function AnalyzeInner() {
         </div>
 
         {/* Columna derecha: motor + entrada PGN */}
-        <aside className="space-y-4">
+        <aside className="space-y-4 xl:col-span-2">
           {mode === 'pgn' && (
             <div className="card-premium p-5">
               <h3 className="font-display text-lg mb-2">Pegá un PGN</h3>

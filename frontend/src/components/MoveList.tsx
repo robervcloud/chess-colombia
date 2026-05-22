@@ -68,12 +68,8 @@ function MoveCell({
     <button
       onClick={() => onSelect(move.ply)}
       className={[
-        'flex items-baseline gap-1.5 px-2 py-0.5 rounded text-left',
-        'transition-all duration-150 ease-out',
-        'hover:bg-wood-50',
-        selected
-          ? 'bg-wood-100 text-ink font-semibold ring-1 ring-gold/40 shadow-sm'
-          : 'text-wood-800',
+        'move-row',
+        selected ? 'move-row-active' : '',
       ].join(' ')}
       title={`${move.san} · ${k}`}
     >

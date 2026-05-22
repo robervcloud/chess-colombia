@@ -375,3 +375,126 @@ html, body {
   background: theme('colors.gold.DEFAULT' / 35%);
   color: theme('colors.ink');
 }
+
+/* ========================================================
+ * Sistema unificado /analyze + /game/[id]/analysis
+ * ========================================================
+ * Clases reutilizables: ambos lugares usan EXACTAMENTE las mismas
+ * para que el producto se sienta como uno solo. Sin librerías.
+ */
+
+/* Grid base del review.
+ *  - mobile (<768): single column (stack natural)
+ *  - md (≥768):     [auto_1fr]            tablero + panel
+ *  - xl (≥1280):    [auto_minmax(0,1fr)_360px]   tablero + motor + sidebar
+ *
+ * Resuelve el problema de "salto brusco" mobile→desktop dándole un
+ * estado intermedio cómodo en laptop. */
+.review-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: theme('spacing.5');
+  align-items: start;
+}
+@media (min-width: 768px) {
+  .review-grid {
+    grid-template-columns: auto 1fr;
+  }
+}
+@media (min-width: 1280px) {
+  .review-grid {
+    grid-template-columns: auto minmax(0, 1fr) 360px;
+  }
+}
+
+/* Card del review: glassmorphism extra refinado, borde cálido, hover
+ * sutil. Hereda de .card-premium pero agrega micro-depth. */
+.review-card {
+  background: linear-gradient(180deg, rgba(255,255,255,0.94) 0%, rgba(252,247,239,0.85) 100%);
+  border: 1px solid theme('colors.wood.100');
+  border-radius: 14px;
+  padding: 1.25rem;
+  backdrop-filter: saturate(125%) blur(2px);
+  -webkit-backdrop-filter: saturate(125%) blur(2px);
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.6) inset,
+    0 1px 2px rgba(58,39,22,0.04),
+    0 8px 24px -16px rgba(58,39,22,0.18);
+  transition: box-shadow 0.25s ease, border-color 0.25s ease;
+}
+.review-card:hover {
+  border-color: theme('colors.gold.DEFAULT' / 30%);
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.6) inset,
+    0 1px 2px rgba(58,39,22,0.04),
+    0 14px 32px -18px rgba(201,162,74,0.32);
+}
+
+/* Wrapper del tablero con halo dorado cálido sutil + sombra cinematográfica */
+.review-board {
+  position: relative;
+  border-radius: 14px;
+}
+.review-board::before {
+  content: '';
+  position: absolute;
+  inset: -14px;
+  border-radius: 22px;
+  background: radial-gradient(60% 60% at 50% 0%, rgba(201,162,74,0.22), transparent 65%);
+  filter: blur(10px);
+  pointer-events: none;
+  z-index: 0;
+}
+.review-board > * { position: relative; z-index: 1; }
+
+/* Move list: fila activa con depth premium. Apple-like.
+ * Aplicar en el botón de jugada cuando está seleccionado. */
+.move-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  text-align: left;
+  color: theme('colors.wood.800');
+  transition: background-color 0.12s ease, color 0.12s ease, box-shadow 0.18s ease, transform 0.12s ease;
+}
+.move-row:hover {
+  background: theme('colors.wood.50');
+}
+.move-row-active {
+  background: linear-gradient(180deg, rgba(232,200,115,0.20), rgba(201,162,74,0.12));
+  color: theme('colors.ink');
+  font-weight: 600;
+  box-shadow:
+    0 0 0 1px theme('colors.gold.DEFAULT' / 55%) inset,
+    0 4px 14px -6px rgba(201,162,74,0.45);
+}
+
+/* Pequeño divider dorado entre secciones del panel de review */
+.panel-divider {
+  height: 1px;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    theme('colors.gold.DEFAULT' / 30%) 50%,
+    transparent 100%);
+  margin: 1rem 0;
+}
+
+/* EvalBar: shine cálido cuando hay mate (atención visual). */
+.eval-mate {
+  box-shadow:
+    0 0 16px -4px rgba(201,162,74,0.6),
+    0 0 0 1px rgba(201,162,74,0.5) inset;
+}
+
+/* Subtítulo de columna del review (consistente entre pages). */
+.review-eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: theme('colors.wood.500');
+  font-weight: 500;
+}
