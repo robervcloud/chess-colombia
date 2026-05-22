@@ -6,7 +6,18 @@ import { Chess } from 'chess.js';
 
 import AuthGuard from '@/components/AuthGuard';
 import EvalBar from '@/components/EvalBar';
+import { MoveBadge } from '@/components/MoveBadge';
+import { ReviewSummary } from '@/components/ReviewSummary';
 import { detectOpening } from '@/lib/openings';
+import {
+  classifyMove,
+  estimateMaterialSacrificed,
+  gamePhase,
+  humanExplanation,
+  CLASS_META,
+  type Classification,
+  type Phase,
+} from '@/lib/moveClassification';
 
 const Chessboard = dynamic(
   () => import('react-chessboard').then((m) => m.Chessboard),
@@ -53,9 +64,15 @@ function AnalyzeInner() {
     color: 'w' | 'b';
     fenAfter: string;
     cp: number | null;     // POV blancas
-    mate: number | null;   // POV blancas
+    mate: number | null;   // POV blancas (mate después de la jugada)
+    /** Mate ANTES de la jugada, POV blancas. Para explicaciones humanas. */
+    mateBefore?: number | null;
     bestUci: string | null;
     depth: number;
+    /** Cp loss POV jugador que movió, computado tras tener eval before+after. */
+    cpLoss?: number | null;
+    classification?: Classification;
+    phase?: Phase;
   }
   const [reviewActive, setReviewActive]   = useState(false);
   const [reviewProgress, setReviewProgress] = useState<{ cur: number; total: number }>({ cur: 0, total: 0 });
@@ -181,12 +198,27 @@ function AnalyzeInner() {
     const c = new Chess();
     const collected: ReviewMove[] = [];
 
+    // Cache eval de la posición ANTERIOR para no re-analizar dos veces.
+    // En el primer ply, analizamos la inicial. En siguientes, reusamos
+    // el "eval después" del ply anterior como "eval antes" del siguiente.
+    let prevEvalCp: number | null = 0;
+    let prevTopLines: Array<{ cp: number | null; mate: number | null; pv?: string[] }> = [];
+    try {
+      const initInfo = await sf.analyzeOne(c.fen(), { depth: 12, multipv: 3, signal: abort.signal, timeoutMs: 15_000 });
+      const top = initInfo.find((l: any) => l.multipv === 1) || initInfo[0];
+      // POV blancas para guardado consistente
+      const sign = c.turn() === 'w' ? 1 : -1;
+      prevEvalCp = top?.cp != null ? top.cp * sign : 0;
+      prevTopLines = initInfo.map((l: any) => ({ cp: l.cp, mate: l.mate, pv: l.pv }));
+    } catch { /* arrancar con prevEvalCp=0 si falla */ }
+
     try {
       for (let i = 0; i < historySan.length; i++) {
         if (abort.signal.aborted) break;
         const san = historySan[i];
         const color: 'w' | 'b' = c.turn();
         const fenBefore = c.fen();
+        const uciPlayed = sanToUci(fenBefore, san);
         let mv;
         try { mv = c.move(san); } catch { mv = null; }
         if (!mv) {
@@ -203,10 +235,65 @@ function AnalyzeInner() {
           const cp   = top?.cp   != null ? top.cp   * sign : null;
           const mate = top?.mate != null ? top.mate * sign : null;
           const bestUci = top?.pv?.[0] || null;
-          const m: ReviewMove = { ply: i + 1, san, color, fenAfter: c.fen(), cp, mate, bestUci, depth: top?.depth ?? 0 };
+
+          // ---- Clasificación ----
+          // cpLoss POV jugador que movió: si jugó blanco, loss = prevEval - newEval; si negro, al revés.
+          let cpLoss: number | null = null;
+          if (cp != null && prevEvalCp != null) {
+            cpLoss = color === 'w' ? (prevEvalCp - cp) : (cp - prevEvalCp);
+            cpLoss = Math.max(0, cpLoss);
+          }
+          // matchedBest: comparar UCI jugado con bestUci de las lines previas
+          const prevTop = prevTopLines[0];
+          const prevBestUci = prevTop?.pv?.[0] || null;
+          const matchedBest = !!(uciPlayed && prevBestUci && uciPlayed.slice(0, 4) === prevBestUci.slice(0, 4));
+          // Material sacrificado para detectar brilliancies
+          const materialSac = uciPlayed ? estimateMaterialSacrificed(fenBefore, uciPlayed) : 0;
+          // SwungToLosing: estabamos ganando (≥+150 POV jugador) y ahora perdemos (≤-50)   
+          const prevPlayerEval: number | null = prevEvalCp == null
+            ? null
+            : (color === 'w' ? prevEvalCp : -prevEvalCp);
+          const newPlayerEval: number | null  = cp != null
+            ? (color === 'w' ? cp : -cp)
+            : null;  
+          
+          const swung = prevPlayerEval != null && prevPlayerEval >= 150 &&
+                        newPlayerEval  != null && newPlayerEval  <= -50;
+
+          // Contexto de mate (POV blancas, como espera classifyMove).
+          // prevTopLines tiene mate POV side-to-move ANTES de mover = POV color.
+          // mate (línea 234) ya está flipped a POV blancas.
+          const prevMatePovStm = prevTopLines[0]?.mate ?? null;
+          const mateBeforeWhite = prevMatePovStm == null
+            ? null
+            : (color === 'w' ? prevMatePovStm : -prevMatePovStm);
+
+          const classification: Classification = classifyMove({
+            cpLoss,
+            matchedBest,
+            swungToLosing: swung,
+            topLinesBefore: prevTopLines,
+            uciPlayed: uciPlayed || undefined,
+            materialSacrificed: materialSac,
+            color,
+            mateBefore: mateBeforeWhite,
+            mateAfter: mate,
+            evalAfter: cp,
+          });
+          const phase = gamePhase(i + 1, c.fen());
+
+          const m: ReviewMove = {
+            ply: i + 1, san, color, fenAfter: c.fen(),
+            cp, mate, mateBefore: mateBeforeWhite, bestUci, depth: top?.depth ?? 0,
+            cpLoss, classification, phase,
+          };
           collected.push(m);
           setReviewMoves([...collected]);
           setReviewProgress({ cur: i + 1, total: historySan.length });
+
+          // Avanzar caches para el siguiente ply
+          prevEvalCp = cp;
+          prevTopLines = info.map((l: any) => ({ cp: l.cp, mate: l.mate, pv: l.pv }));
         } catch (err: any) {
           if (err?.message === 'aborted') break;
           // Posición con timeout: registrar sin eval y continuar.
@@ -244,17 +331,31 @@ function AnalyzeInner() {
     return detectOpening(slice);
   }, [historySan, ply]);
 
-  // ---- Flechas: mejor jugada según top line ----
+  // ---- Flechas multipv premium: top1 dorado · top2 azul · top3 esmeralda ----
   const customArrows = useMemo<Array<[Square, Square, string]>>(() => {
-    const top = lines.find((l) => l.multipv === 1);
-    if (!top || !top.pv?.[0]) return [];
-    const uci = top.pv[0];
-    if (uci.length < 4) return [];
-    return [[
-      uci.substring(0, 2) as Square,
-      uci.substring(2, 4) as Square,
-      'rgba(201, 162, 74, 0.85)',
-    ]];
+    const arrows: Array<[Square, Square, string]> = [];
+    // Paleta colombiana premium translúcida, opacidades decrecientes
+    // para que la mejor jugada se distinga claramente.
+    const PALETTE = [
+      'rgba(201, 162, 74, 0.85)',  // #1 dorado vivo
+      'rgba(30, 77, 139, 0.55)',   // #2 azul profundo
+      'rgba(31, 122, 90, 0.45)',   // #3 esmeralda
+    ];
+    const seen = new Set<string>();
+    for (const l of lines.slice(0, 3)) {
+      const uci = l.pv?.[0];
+      if (!uci || uci.length < 4) continue;
+      const key = uci.substring(0, 4);
+      if (seen.has(key)) continue; // no duplicar (multipv puede coincidir en raros casos)
+      seen.add(key);
+      const idx = (l.multipv || 1) - 1;
+      arrows.push([
+        uci.substring(0, 2) as Square,
+        uci.substring(2, 4) as Square,
+        PALETTE[idx] || PALETTE[2],
+      ]);
+    }
+    return arrows;
   }, [lines]);
 
   // Eval mostrada en EvalBar (siempre POV blancas)
@@ -503,7 +604,7 @@ function AnalyzeInner() {
             )}
           </div>
 
-          {/* Historial de jugadas */}
+          {/* Historial de jugadas con badges inline */}
           {historySan.length > 0 && (
             <div className="card-premium p-5 max-h-[40vh] overflow-y-auto">
               <h3 className="font-display text-lg mb-2">Jugadas</h3>
@@ -512,8 +613,12 @@ function AnalyzeInner() {
                   const moveNum = Math.floor(i / 2) + 1;
                   const isWhiteMove = i % 2 === 0;
                   const active = ply === i + 1;
+                  const rm = reviewMoves[i];
+                  const k = rm?.classification;
+                  const symbol = k ? CLASS_META[k].symbol : '';
+                  const symbolColor = k ? CLASS_META[k].glow : undefined;
                   return (
-                    <span key={i} className="inline-flex items-baseline gap-1">
+                    <span key={i} className="inline-flex items-baseline gap-0.5">
                       {isWhiteMove && (
                         <span className="text-[10px] text-wood-400 tabular-nums">{moveNum}.</span>
                       )}
@@ -526,11 +631,62 @@ function AnalyzeInner() {
                         }`}
                       >
                         {san}
+                        {symbol && (
+                          <span className="ml-0.5 font-bold text-[10px]" style={{ color: symbolColor }}>
+                            {symbol}
+                          </span>
+                        )}
                       </button>
                     </span>
                   );
                 })}
               </div>
+            </div>
+          )}
+
+          {/* Panel de jugada actual: badge + explicación humana */}
+          {(() => {
+            const rm = reviewMoves[ply - 1];
+            if (!rm || !rm.classification) return null;
+            const expl = humanExplanation({
+              classification: rm.classification,
+              cpLoss: rm.cpLoss,
+              color: rm.color,
+              phase: rm.phase,
+              ply: rm.ply,
+              san: rm.san,
+              mateBefore: rm.mateBefore ?? null,
+              mateAfter: rm.mate ?? null,
+              evalAfter: rm.cp ?? null,
+            });
+            return (
+              <div className="card-premium p-5 animate-fadeIn">
+                <p className="text-[10px] uppercase tracking-widest text-wood-500 mb-2">
+                  Jugada {Math.ceil(rm.ply / 2)}{rm.color === 'w' ? '.' : '…'}
+                </p>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="font-display text-2xl">{rm.san}</span>
+                  <MoveBadge k={rm.classification} variant="large" />
+                </div>
+                {expl && <p className="text-sm text-wood-700 leading-snug">{expl}</p>}
+                {rm.cpLoss != null && rm.cpLoss > 0 && (
+                  <p className="text-[11px] text-wood-500 mt-2 tabular-nums">
+                    Pérdida estimada: {Math.round(rm.cpLoss)} cp
+                  </p>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Resumen premium con breakdown por fase + timeline */}
+          {reviewMoves.length > 5 && reviewMoves.some((m) => m.classification) && (
+            <div className="card-premium p-5">
+              <h3 className="font-display text-lg mb-4">Resumen</h3>
+              <ReviewSummary
+                moves={reviewMoves as any}
+                onSelectPly={(p) => setPly(p)}
+                selectedPly={ply}
+              />
             </div>
           )}
         </aside>
@@ -644,4 +800,14 @@ function EvalGraph({ moves, total, onSelect, active }: {
       <p className="text-[10px] text-wood-500 mt-1">Click en el gráfico para navegar</p>
     </div>
   );
+}
+
+/** Convierte un SAN a UCI desde el FEN previo. Devuelve null si falla. */
+function sanToUci(fenBefore: string, san: string): string | null {
+  try {
+    const c = new Chess(fenBefore);
+    const r = c.move(san);
+    if (!r) return null;
+    return `${r.from}${r.to}${r.promotion || ''}`;
+  } catch { return null; }
 }

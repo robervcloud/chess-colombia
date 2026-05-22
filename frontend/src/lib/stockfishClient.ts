@@ -122,11 +122,43 @@ export async function createStockfish(): Promise<StockfishHandle> {
     log('destroyed');
   }
 
+  // ---- Cache LRU de posiciones (analyzeOne) ----
+  // Evita reanalizar FENs ya vistos en el loop de review o navegación.
+  // Cap a 256 entradas; FIFO al exceder.
+  const evalCache = new Map<string, SfInfo[]>();
+  const cacheKey = (fen: string, depth: number, multipv: number) => `${depth}|${multipv}|${fen}`;
+  function cacheGet(key: string): SfInfo[] | null {
+    if (!evalCache.has(key)) return null;
+    const v = evalCache.get(key)!;
+    // refresh LRU: re-set para moverlo al final
+    evalCache.delete(key);
+    evalCache.set(key, v);
+    return v;
+  }
+  function cachePut(key: string, value: SfInfo[]) {
+    evalCache.set(key, value);
+    if (evalCache.size > 256) {
+      const first = evalCache.keys().next().value;
+      if (first !== undefined) evalCache.delete(first);
+    }
+  }
+
   function analyzeOne(fen: string, opts: AnalyzeOneOpts = {}): Promise<SfInfo[]> {
     const depth     = opts.depth     ?? 14;
     const multipv   = opts.multipv   ?? 3;
     const timeoutMs = opts.timeoutMs ?? POSITION_TIMEOUT_MS;
     const signal    = opts.signal;
+
+    // Cache hit → resolve inmediato (mismo fen/depth/multipv)
+    const key = cacheKey(fen, depth, multipv);
+    const cached = cacheGet(key);
+    if (cached) {
+      // notificar al onInfo global para que la UI refleje el resultado
+      if (infoCb) {
+        try { infoCb(cached); } catch {}
+      }
+      return Promise.resolve(cached);
+    }
 
     return new Promise<SfInfo[]>((resolve, reject) => {
       const localBuf = new Map<number, SfInfo>();
@@ -140,7 +172,10 @@ export async function createStockfish(): Promise<StockfishHandle> {
       };
       const finish = (info: SfInfo[]) => {
         if (done) return;
-        done = true; cleanup(); resolve(info);
+        done = true; cleanup();
+        // Guardar en cache solo si tenemos datos completos
+        if (info.length > 0) cachePut(key, info);
+        resolve(info);
       };
       const fail = (err: Error) => {
         if (done) return;

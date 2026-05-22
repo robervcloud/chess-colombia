@@ -320,6 +320,12 @@ function AnalysisInner() {
         classification: currentMove.classification,
         cpLoss: currentMove.centipawnLoss,
         color: currentMove.color,
+        phase: gamePhase(selectedPly - 1, currentMove.fenAfter),
+        ply: currentMove.ply,
+        san: currentMove.san,
+        mateBefore: currentMove.mateBefore,
+        mateAfter: currentMove.mateAfter,
+        evalAfter: currentMove.evalAfter,
       })
     : null;
 
