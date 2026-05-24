@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
+import { AndeanMotif } from '@/components/AndeanMotif';
 
 /**
  * Landing — premium, minimalista, identidad colombiana sutil.
@@ -62,11 +63,10 @@ function Hero() {
       </div>
 
       <div className="relative max-w-6xl mx-auto px-5 py-20 md:py-28">
-        {/* Eyebrow */}
+        {/* Eyebrow con motif andino */}
         <div className="inline-flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-wood-700">
-          <span className="w-6 h-px bg-gold/70" />
-          <span>Plataforma colombiana</span>
-          <span className="text-gold">★</span>
+          <AndeanMotif variant="icon" className="w-7 h-3.5 text-gold" />
+          <span>Hecho en Colombia, para Colombia</span>
         </div>
 
         <h1 className="font-display mt-6 text-5xl md:text-7xl leading-[1.02] tracking-tight max-w-3xl">
@@ -76,24 +76,44 @@ function Hero() {
         </h1>
 
         <p className="mt-6 text-lg text-wood-800/80 max-w-xl leading-relaxed">
-          Partidas en tiempo real con jugadores de Colombia o del mundo.
-          Análisis con Stockfish al terminar. Sin anuncios, sin distracciones,
-          gratis.
+          Una plataforma para jugar, analizar y aprender ajedrez con la
+          comunidad colombiana. Tiempo real, motor Stockfish, lecciones
+          desde cero. Sin anuncios, sin distracciones.
         </p>
 
         <div className="mt-10 flex flex-wrap gap-3">
           <Link href="/register" className="btn-primary hover-lift">
-            Crear cuenta
+            Crear cuenta gratis
+          </Link>
+          <Link
+            href="/aprender"
+            className="btn-ghost hover-lift inline-flex items-center gap-2"
+            style={{
+              borderColor: 'rgba(201,162,74,0.55)',
+              color: '#5a4423',
+            }}
+          >
+            <span>Aprender ajedrez</span>
+            <span className="text-gold">→</span>
           </Link>
           <Link href="/login" className="btn-ghost hover-lift">
             Ya tengo cuenta
           </Link>
         </div>
 
-        {/* Marca de patrimonio sutil */}
-        <p className="mt-10 text-xs tracking-wider text-wood-500 uppercase">
-          Patrimonio · Comunidad · Juego limpio
+        {/* Microcopy de comunidad */}
+        <p className="mt-10 text-xs tracking-wider text-wood-500 uppercase flex items-center gap-2">
+          <span>Comunidad</span>
+          <span className="w-1 h-1 rounded-full bg-gold" />
+          <span>Juego limpio</span>
+          <span className="w-1 h-1 rounded-full bg-gold" />
+          <span>Patrimonio</span>
         </p>
+      </div>
+
+      {/* Cordillera al pie del hero — identidad andina sutil */}
+      <div className="absolute bottom-0 left-0 right-0 h-28 pointer-events-none">
+        <AndeanMotif variant="banner" className="w-full h-full" />
       </div>
     </section>
   );
@@ -155,6 +175,12 @@ function FeatureGrid() {
 
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5 mt-12">
           <Feature
+            icon="✦"
+            title="Aprende desde cero"
+            body="Lecciones interactivas para personas que nunca jugaron. Cada pieza, cada idea, en un tablero que responde."
+            href="/aprender"
+          />
+          <Feature
             icon="♟︎"
             title="Validación en servidor"
             body="Cada jugada se valida contra el estado real de la partida. Imposible hacer trampa con un cliente modificado."
@@ -165,7 +191,7 @@ function FeatureGrid() {
             body="Tics de décima de segundo bajo presión. Detección de tiempo agotado en el servidor, no en tu pantalla."
           />
           <Feature
-            icon="🇨🇴"
+            icon="△"
             title="Filtro Colombia"
             body="Juega sólo con paisanos cuando quieras. Si no aparece nadie en 8 segundos, abrimos al mundo."
             subtle
@@ -180,11 +206,6 @@ function FeatureGrid() {
             title="Reconexión sin perder partida"
             body="Si se te cae el internet, vuelves a la misma posición. Treinta segundos de gracia antes de declarar abandono."
           />
-          <Feature
-            icon="✦"
-            title="Gratis, sin ads"
-            body="Sin banners, sin telemetría intrusiva. Patrocinado por nuestro tiempo libre y unos cafés."
-          />
         </div>
       </div>
     </section>
@@ -196,19 +217,37 @@ function Feature({
   title,
   body,
   subtle,
+  href,
 }: {
   icon: string;
   title: string;
   body: string;
   subtle?: boolean;
+  href?: string;
 }) {
-  return (
-    <article className="card-premium hover-lift p-6">
+  const content = (
+    <>
       <div className={`text-2xl ${subtle ? 'opacity-90' : 'text-accent'}`}>{icon}</div>
-      <h3 className="font-display text-lg mt-3">{title}</h3>
+      <h3 className="font-display text-lg mt-3 flex items-center gap-1.5">
+        {title}
+        {href && (
+          <span className="text-xs text-gold opacity-0 group-hover:opacity-100 transition-opacity">
+            →
+          </span>
+        )}
+      </h3>
       <p className="text-wood-700/80 mt-2 text-sm leading-relaxed">{body}</p>
-    </article>
+    </>
   );
+
+  if (href) {
+    return (
+      <Link href={href} className="card-premium hover-lift p-6 group block">
+        {content}
+      </Link>
+    );
+  }
+  return <article className="card-premium hover-lift p-6">{content}</article>;
 }
 
 /* ---------------------------------------------------------------- */

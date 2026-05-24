@@ -39,6 +39,14 @@ export default function Navbar() {
                 Jugar
               </Link>
               <Link
+                href="/aprender"
+                className={`text-sm font-medium hover:text-accent transition ${
+                  pathname?.startsWith('/aprender') ? 'text-accent' : 'text-wood-800'
+                }`}
+              >
+                Aprender
+              </Link>
+              <Link
                 href="/tactics"
                 className={`text-sm font-medium hover:text-accent transition ${
                   pathname?.startsWith('/tactics') ? 'text-accent' : 'text-wood-800'
