@@ -8,6 +8,7 @@ import AuthGuard from '@/components/AuthGuard';
 import EvalBar from '@/components/EvalBar';
 import { MoveBadge } from '@/components/MoveBadge';
 import { ReviewSummary } from '@/components/ReviewSummary';
+import { useChessShortcuts } from '@/hooks/useChessShortcuts';
 import { detectOpening } from '@/lib/openings';
 import {
   classifyMove,
@@ -105,15 +106,37 @@ function AnalyzeInner() {
     };
   }, []);
 
-  // ---- Rebuild chess instance al cambiar ply ----
-  const fen = useMemo(() => {
+  // ---- Rebuild chess instance al cambiar ply + casillas de last move ----
+  // Memoizado conjunto: ambos derivan de la misma reconstrucción. Evita
+  // dos useMemos con el mismo costo en cada render de ply.
+  const { fen, lastMoveSquares } = useMemo(() => {
     const c = new Chess();
+    let lastFrom: string | null = null;
+    let lastTo: string | null = null;
     for (let i = 0; i < Math.min(ply, historySan.length); i++) {
-      try { c.move(historySan[i]); } catch { break; }
+      try {
+        const mv = c.move(historySan[i]);
+        if (mv) { lastFrom = mv.from; lastTo = mv.to; }
+      } catch { break; }
     }
     chessRef.current = c;
-    return c.fen();
+    return {
+      fen: c.fen(),
+      lastMoveSquares: lastFrom && lastTo ? { from: lastFrom, to: lastTo } : null,
+    };
   }, [historySan, ply]);
+
+  // Estilos para resaltar la última jugada (estilo Lichess: tinte dorado sutil)
+  const customSquareStyles = useMemo<Record<string, React.CSSProperties>>(() => {
+    if (!lastMoveSquares) return {};
+    const highlight: React.CSSProperties = {
+      background: 'radial-gradient(circle, rgba(232,200,115,0.45) 60%, rgba(232,200,115,0.18) 100%)',
+    };
+    return {
+      [lastMoveSquares.from]: highlight,
+      [lastMoveSquares.to]:   highlight,
+    };
+  }, [lastMoveSquares]);
 
   // ---- Disparar análisis cuando cambia la posición (modo LIVE) ----
   // Se DESACTIVA si está corriendo el review loop, para no pisar
@@ -324,6 +347,57 @@ function AnalyzeInner() {
     setPly(0);
   }
 
+  /**
+   * Aplica una jugada UCI sugerida por el motor (click en engine line).
+   * Si estamos navegando un ply intermedio, trunca la historia desde ahí
+   * y agrega la nueva jugada — comportamiento estándar de Lichess.
+   */
+  function applyEngineMove(uci: string | undefined) {
+    if (!uci || uci.length < 4 || reviewActive) return;
+    const c = chessRef.current;
+    const from = uci.substring(0, 2);
+    const to   = uci.substring(2, 4);
+    const promo = uci.length > 4 ? uci[4] : undefined;
+    let mv;
+    try { mv = c.move({ from, to, promotion: promo as any }); }
+    catch { return; }
+    if (!mv) return;
+    const newHistory = [...historySan.slice(0, ply), mv.san];
+    setHistorySan(newHistory);
+    setPly(newHistory.length);
+  }
+
+  /**
+   * Copia el PGN al portapapeles. Útil para compartir el análisis o
+   * pegarlo en otra herramienta (Lichess studies, Chessbase, etc).
+   */
+  const [copiedPgn, setCopiedPgn] = useState(false);
+  async function copyPgn() {
+    if (historySan.length === 0) return;
+    // Construir PGN simple a partir de la historia SAN
+    const c = new Chess();
+    for (const san of historySan) {
+      try { c.move(san); } catch { break; }
+    }
+    const pgn = c.pgn();
+    try {
+      await navigator.clipboard.writeText(pgn);
+      setCopiedPgn(true);
+      setTimeout(() => setCopiedPgn(false), 1500);
+    } catch {
+      // Fallback: seleccionar manualmente
+    }
+  }
+
+  // ---- Atajos de teclado estilo Lichess ----
+  useChessShortcuts({
+    onPrev:  () => setPly((p) => Math.max(0, p - 1)),
+    onNext:  () => setPly((p) => Math.min(historySan.length, p + 1)),
+    onFirst: () => setPly(0),
+    onLast:  () => setPly(historySan.length),
+    onFlip:  () => setOrientation((o) => (o === 'white' ? 'black' : 'white')),
+  });
+
   // ---- Apertura detectada ----
   const opening = useMemo(() => {
     const slice = historySan.slice(0, Math.min(ply, historySan.length));
@@ -448,6 +522,7 @@ function AnalyzeInner() {
                 boardOrientation={orientation}
                 boardWidth={boardWidth}
                 customArrows={customArrows}
+                customSquareStyles={customSquareStyles}
                 customBoardStyle={{
                   borderRadius: '12px',
                   boxShadow: '0 12px 40px -12px rgba(58,39,22,0.35)',
@@ -457,24 +532,35 @@ function AnalyzeInner() {
               />
             </div>
 
-            {/* Controles */}
+            {/* Controles + atajos */}
             <div className="flex items-center gap-2 mt-2 flex-wrap">
-              <button className="btn-ghost px-2 py-1 text-sm" onClick={() => setPly(0)} disabled={ply === 0}>⏮</button>
-              <button className="btn-ghost px-2 py-1 text-sm" onClick={() => setPly((p) => Math.max(0, p - 1))} disabled={ply === 0}>◀</button>
+              <button className="btn-ghost px-2 py-1 text-sm" onClick={() => setPly(0)} disabled={ply === 0} title="Inicio (Home)">⏮</button>
+              <button className="btn-ghost px-2 py-1 text-sm" onClick={() => setPly((p) => Math.max(0, p - 1))} disabled={ply === 0} title="Atrás (←)">◀</button>
               <span className="text-xs tabular-nums text-wood-600 min-w-[60px] text-center">
                 {ply} / {historySan.length}
               </span>
-              <button className="btn-ghost px-2 py-1 text-sm" onClick={() => setPly((p) => Math.min(historySan.length, p + 1))} disabled={ply >= historySan.length}>▶</button>
-              <button className="btn-ghost px-2 py-1 text-sm" onClick={() => setPly(historySan.length)} disabled={ply >= historySan.length}>⏭</button>
+              <button className="btn-ghost px-2 py-1 text-sm" onClick={() => setPly((p) => Math.min(historySan.length, p + 1))} disabled={ply >= historySan.length} title="Adelante (→)">▶</button>
+              <button className="btn-ghost px-2 py-1 text-sm" onClick={() => setPly(historySan.length)} disabled={ply >= historySan.length} title="Fin (End)">⏭</button>
               <button
                 className="btn-ghost px-2 py-1 text-sm ml-2"
                 onClick={() => setOrientation((o) => o === 'white' ? 'black' : 'white')}
-                title="Girar tablero"
+                title="Girar tablero (F)"
               >⇅</button>
-              <button className="btn-ghost px-2 py-1 text-sm ml-auto" onClick={reset} disabled={historySan.length === 0}>
+              <button
+                className="btn-ghost px-2 py-1 text-xs"
+                onClick={copyPgn}
+                disabled={historySan.length === 0}
+                title="Copiar PGN al portapapeles"
+              >
+                {copiedPgn ? '✓ Copiado' : '⧉ Copiar PGN'}
+              </button>
+              <button className="btn-ghost px-2 py-1 text-sm ml-auto" onClick={reset} disabled={historySan.length === 0} title="Limpiar tablero">
                 Limpiar
               </button>
             </div>
+            <p className="text-[10px] text-wood-400 mt-1.5 hidden sm:block">
+              Atajos: <kbd className="px-1 py-0.5 rounded bg-wood-50 border border-wood-100 text-[9px] font-mono text-wood-700">←</kbd> <kbd className="px-1 py-0.5 rounded bg-wood-50 border border-wood-100 text-[9px] font-mono text-wood-700">→</kbd> navegar · <kbd className="px-1 py-0.5 rounded bg-wood-50 border border-wood-100 text-[9px] font-mono text-wood-700">f</kbd> girar
+            </p>
           </div>
         </div>
 
@@ -583,20 +669,30 @@ function AnalyzeInner() {
                   <li className="text-xs text-wood-500 italic">Analizando…</li>
                 )}
                 {lines.map((l) => (
-                  <li key={l.multipv} className="flex items-baseline gap-2 text-sm">
-                    <span className="text-[10px] uppercase tracking-wider text-wood-400 tabular-nums w-5">
-                      #{l.multipv}
-                    </span>
-                    <span className={`font-display tabular-nums w-12 text-right ${
-                      l.mate != null
-                        ? (l.mate > 0 ? 'text-accent' : 'text-danger')
-                        : (l.cp != null && l.cp >= 0 ? 'text-ink' : 'text-wood-600')
-                    }`}>
-                      {fmtScore(l, chessRef.current.turn())}
-                    </span>
-                    <span className="text-wood-700 font-mono text-xs truncate flex-1">
-                      {uciToSanLine(fen, l.pv)}
-                    </span>
+                  <li key={l.multipv}>
+                    <button
+                      onClick={() => applyEngineMove(l.pv?.[0])}
+                      disabled={reviewActive || !l.pv?.[0]}
+                      className="w-full flex items-baseline gap-2 text-sm px-2 py-1 rounded-md transition-colors hover:bg-gold/10 disabled:hover:bg-transparent disabled:cursor-default text-left group"
+                      title={reviewActive ? 'Pausá el review para jugar esta línea' : 'Click: aplicar esta jugada'}
+                    >
+                      <span className="text-[10px] uppercase tracking-wider text-wood-400 tabular-nums w-5">
+                        #{l.multipv}
+                      </span>
+                      <span className={`font-display tabular-nums w-12 text-right ${
+                        l.mate != null
+                          ? (l.mate > 0 ? 'text-accent' : 'text-danger')
+                          : (l.cp != null && l.cp >= 0 ? 'text-ink' : 'text-wood-600')
+                      }`}>
+                        {fmtScore(l, chessRef.current.turn())}
+                      </span>
+                      <span className="text-wood-700 font-mono text-xs truncate flex-1">
+                        {uciToSanLine(fen, l.pv)}
+                      </span>
+                      <span className="text-[10px] text-gold opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                        ↵
+                      </span>
+                    </button>
                   </li>
                 ))}
               </ul>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 
 import { MoveBadge } from '@/components/MoveBadge';
 import {
@@ -46,7 +46,7 @@ interface ReviewSummaryProps {
  *
  * Reutilizable en /game/[id]/analysis y /analyze. Sin libs externas.
  */
-export function ReviewSummary({
+function ReviewSummaryInner({
   moves,
   myColor,
   onSelectPly,
@@ -344,5 +344,26 @@ function Moments({
     </div>
   );
 }
+
+/**
+ * Memoizado con comparator: re-renderiza solo si cambia la longitud
+ * de moves, el ply seleccionado o el color. Esto significa que durante
+ * streaming, el panel solo recalcula cuando llega una nueva jugada,
+ * no en cada poll de progreso.
+ */
+export const ReviewSummary = memo(ReviewSummaryInner, (prev, next) => {
+  if (prev.selectedPly !== next.selectedPly) return false;
+  if (prev.myColor !== next.myColor) return false;
+  if (prev.compact !== next.compact) return false;
+  if (prev.onSelectPly !== next.onSelectPly) return false;
+  if (prev.moves.length !== next.moves.length) return false;
+  // Última jugada cambió de clasificación (streaming actualizó un ply)
+  const lastIdx = prev.moves.length - 1;
+  if (lastIdx >= 0) {
+    if (prev.moves[lastIdx].classification !== next.moves[lastIdx].classification) return false;
+    if (prev.moves[lastIdx].cpLoss !== next.moves[lastIdx].cpLoss) return false;
+  }
+  return true;
+});
 
 export default ReviewSummary;

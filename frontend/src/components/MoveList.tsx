@@ -1,5 +1,7 @@
 'use client';
 
+import { memo } from 'react';
+
 import { MoveBadge } from '@/components/MoveBadge';
 import type { MoveAnalysis } from '@/types/analysis';
 
@@ -17,7 +19,7 @@ interface Props {
  * los 9 niveles de Classification, incluido book/brilliant/great que
  * faltaban en la versión previa.
  */
-export default function MoveList({ moves, selectedPly, onSelect }: Props) {
+function MoveList({ moves, selectedPly, onSelect }: Props) {
   // Agrupamos en pares (white, black) por número de jugada
   const rows: { num: number; w?: MoveAnalysis; b?: MoveAnalysis }[] = [];
   for (const m of moves) {
@@ -78,3 +80,20 @@ function MoveCell({
     </button>
   );
 }
+
+/**
+ * Memoizado con comparator: re-renderiza solo si cambia la longitud
+ * de moves, el ply seleccionado, o la última clasificación (streaming).
+ * Reduce drásticamente rerenders durante el polling del análisis live.
+ */
+export default memo(MoveList, (prev, next) => {
+  if (prev.selectedPly !== next.selectedPly) return false;
+  if (prev.onSelect !== next.onSelect) return false;
+  if (prev.moves.length !== next.moves.length) return false;
+  // Comparar últimas clasificaciones (caso streaming: misma length, classification cambia)
+  const lastIdx = prev.moves.length - 1;
+  if (lastIdx >= 0 && prev.moves[lastIdx].classification !== next.moves[lastIdx].classification) {
+    return false;
+  }
+  return true;
+});
