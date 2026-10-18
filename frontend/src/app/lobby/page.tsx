@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import AuthGuard from '@/components/AuthGuard';
 import BotPicker from '@/components/BotPicker';
 import { getSocket } from '@/lib/socket';
@@ -27,7 +28,8 @@ function LobbyInner() {
   const [expanded, setExpanded] = useState<boolean>(false); // si saltó CO->GLOBAL
   const [botCreating, setBotCreating] = useState<string | null>(null);
   // Vista del panel: 'match' = matchmaking, 'bots' = grid de bots inline.
-  const [view, setView] = useState<'match' | 'bots'>('match');
+  // Los invitados sólo juegan contra bots: abrimos esa vista de una vez.
+  const [view, setView] = useState<'match' | 'bots'>(() => (user?.guest ? 'bots' : 'match'));
   // Indica si entramos a 'bots' por timeout (cambia el copy del intro).
   const [fromTimeout, setFromTimeout] = useState(false);
 
@@ -132,9 +134,22 @@ function LobbyInner() {
     <section className="flex-1 max-w-4xl mx-auto w-full px-5 py-12">
       <div className="mb-8">
         <p className="text-accent font-medium uppercase tracking-widest text-xs">Lobby</p>
-        <h1 className="font-display text-4xl mt-1">Hola, {user?.username}.</h1>
+        <h1 className="font-display text-4xl mt-1">
+          {user?.guest ? 'Hola, invitado.' : `Hola, ${user?.username}.`}
+        </h1>
         <p className="text-wood-600 mt-1">Elige con quién quieres jugar y entra al tablero.</p>
       </div>
+
+      {user?.guest && (
+        <div className="rounded-lg border border-gold/40 bg-gold/10 px-4 py-3 mb-6 text-sm text-wood-800">
+          Estás jugando como invitado: puedes jugar contra los bots, resolver tácticas y ver el
+          análisis de tus partidas. La sesión dura 24 horas.{' '}
+          <Link href="/register" className="text-accent font-medium hover:underline">
+            Crea una cuenta gratis
+          </Link>{' '}
+          para jugar online contra otras personas y guardar tu progreso.
+        </div>
+      )}
 
       <div className="card p-8">
         <h2 className="font-display text-2xl mb-1">Encontrar partida</h2>
@@ -205,9 +220,15 @@ function LobbyInner() {
 
         {view === 'match' && !searching && (
           <div className="space-y-3 animate-fadeIn">
-            <button onClick={findMatch} className="btn-primary w-full">
-              Jugar online
-            </button>
+            {user?.guest ? (
+              <Link href="/register" className="btn-primary w-full text-center block">
+                Crea una cuenta para jugar online
+              </Link>
+            ) : (
+              <button onClick={findMatch} className="btn-primary w-full">
+                Jugar online
+              </button>
+            )}
             <button
               onClick={() => { setFromTimeout(false); setView('bots'); }}
               className="btn-ghost w-full"

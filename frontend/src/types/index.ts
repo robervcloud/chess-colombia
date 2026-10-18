@@ -22,6 +22,8 @@ export interface User {
   losses?: number;
   draws?: number;
   created_at?: string;
+  /** Sesión de invitado (sin registro, 24 h, sólo bots). */
+  guest?: boolean;
 }
 
 export type Color = 'w' | 'b';

@@ -34,13 +34,22 @@ async function googleAuth(req, res, next) {
   }
 }
 
-async function me(req, res, next) {
+async function guest(req, res, next) {
   try {
-    const profile = await authService.getPublicProfile(req.user.id);
-    res.json({ user: profile });
+    const result = await authService.createGuest();
+    res.status(201).json(result);
   } catch (err) {
     next(err);
   }
 }
 
-module.exports = { register, login, googleAuth, me };
+async function me(req, res, next) {
+  try {
+    const profile = await authService.getPublicProfile(req.user.id);
+    res.json({ user: { ...profile, guest: req.user.guest } });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { register, login, googleAuth, guest, me };

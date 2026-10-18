@@ -21,4 +21,14 @@ const apiLimiter = rateLimit({
   message: { error: 'Demasiadas solicitudes. Espera un momento.' },
 });
 
-module.exports = { authLimiter, apiLimiter };
+// Invitados: cada llamada crea una fila en `users`, así que limitamos
+// más fuerte para que nadie llene la tabla con scripts.
+const guestLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hora
+  max: 10,                  // 10 invitados por IP por hora
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiadas sesiones de invitado. Intenta más tarde o crea una cuenta.' },
+});
+
+module.exports = { authLimiter, apiLimiter, guestLimiter };

@@ -8,12 +8,20 @@
  *   - Soporte para login/registro vía Google ID Token.
  *   - Tolera `password_hash` NULL (cuentas sólo-Google).
  */
+const crypto = require('crypto');
 const bcrypt = require('bcrypt');
 const supabase = require('../config/supabase');
 const env = require('../config/env');
 const { signToken } = require('../utils/jwt');
 
 const SALT_ROUNDS = 10;
+
+// Usuarios invitados: username reservado y email en el dominio .invalid
+// (reservado por RFC 2606, nunca recibe correo). Sin password ni Google,
+// así que nadie puede volver a "iniciar sesión" en una cuenta invitada.
+const GUEST_PREFIX = 'guest_';
+const GUEST_EMAIL_DOMAIN = 'guest.invalid';
+const GUEST_TOKEN_TTL = '24h';
 
 // ------------------------------------------------------------------
 // Helpers
@@ -52,6 +60,7 @@ function deriveUsernameFromEmail(email) {
     .replace(/\+.*$/, '')
     .replace(/[^a-z0-9_-]/g, '')
     .slice(0, 25);
+  if (base.startsWith(GUEST_PREFIX)) return `p${base}`.slice(0, 25);
   if (base.length >= 3) return base;
   return 'player' + Math.floor(1000 + Math.random() * 9000);
 }
@@ -258,6 +267,40 @@ async function loginWithGoogle({ idToken, preferredUsername }) {
 }
 
 /**
+ * Crea una sesión de invitado: un usuario temporal sin email real ni
+ * password, con un JWT de 24 h marcado `guest: true`.
+ * Los invitados pueden jugar contra bots, resolver tácticas y ver el
+ * análisis, pero no entran al matchmaking contra humanos.
+ * Las filas viejas se limpian con database/migration_011_guest_cleanup.sql.
+ */
+async function createGuest() {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const username = `${GUEST_PREFIX}${crypto.randomBytes(3).toString('hex')}`;
+    const email = `${username}-${crypto.randomUUID()}@${GUEST_EMAIL_DOMAIN}`;
+
+    const { data: user, error } = await supabase
+      .from('users')
+      .insert({ username, email, password_hash: null, country: 'CO' })
+      .select('id, username, country, rating, created_at')
+      .single();
+
+    if (!error) {
+      const token = signToken(
+        { sub: user.id, username: user.username, country: user.country, guest: true },
+        { expiresIn: GUEST_TOKEN_TTL }
+      );
+      return { user: { ...user, guest: true }, token };
+    }
+    // 23505 = username repetido (muy improbable): reintentar con otro sufijo
+    if (error.code !== '23505') {
+      console.error('[auth.guest] insert error:', error);
+      throw { status: 500, message: 'No se pudo crear la sesión de invitado' };
+    }
+  }
+  throw { status: 503, message: 'No se pudo crear la sesión de invitado. Intenta de nuevo.' };
+}
+
+/**
  * Devuelve el usuario "público". Usado por GET /api/auth/me.
  * También revalida `banned` para que un usuario baneado pierda acceso
  * aunque el JWT siga vivo.
@@ -276,4 +319,4 @@ async function getPublicProfile(userId) {
   return publicUser(data);
 }
 
-module.exports = { register, login, loginWithGoogle, getPublicProfile };
+module.exports = { register, login, loginWithGoogle, createGuest, getPublicProfile, GUEST_PREFIX };

@@ -12,6 +12,7 @@ interface AuthState {
   login: (identifier: string, password: string) => Promise<void>;
   loginWithGoogle: (idToken: string, preferredUsername?: string) => Promise<void>;
   register: (data: { username: string; email: string; password: string; country: string }) => Promise<void>;
+  loginAsGuest: () => Promise<void>;
   logout: () => void;
   hydrate: () => Promise<void>;
 }
@@ -65,6 +66,22 @@ export const useAuth = create<AuthState>((set) => ({
       });
       setToken(token);
       set({ user, loading: false });
+    } catch (e) {
+      set({ loading: false });
+      throw e;
+    }
+  },
+
+  async loginAsGuest() {
+    set({ loading: true });
+    try {
+      const { user, token } = await api<{ user: User; token: string }>('/api/auth/guest', {
+        method: 'POST',
+        auth: false,
+      });
+      disconnectSocket(); // por si había un socket con otra sesión
+      setToken(token);
+      set({ user, loading: false, hydrated: true });
     } catch (e) {
       set({ loading: false });
       throw e;

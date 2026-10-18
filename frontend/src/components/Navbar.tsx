@@ -70,12 +70,21 @@ export default function Navbar() {
               >
                 Historial
               </Link>
-              <div className="hidden sm:flex items-center gap-2 pl-3 border-l border-wood-200">
-                <span className="text-sm text-wood-600">
-                  {user.username} <span className="text-wood-400">·</span>{' '}
-                  <span className="font-medium">{user.rating}</span>
-                </span>
-              </div>
+              {user.guest ? (
+                <div className="hidden sm:flex items-center gap-2 pl-3 border-l border-wood-200">
+                  <span className="text-sm text-wood-600">Invitado</span>
+                  <Link href="/register" className="btn-primary py-1.5 px-3 text-sm">
+                    Crear cuenta
+                  </Link>
+                </div>
+              ) : (
+                <div className="hidden sm:flex items-center gap-2 pl-3 border-l border-wood-200">
+                  <span className="text-sm text-wood-600">
+                    {user.username} <span className="text-wood-400">·</span>{' '}
+                    <span className="font-medium">{user.rating}</span>
+                  </span>
+                </div>
+              )}
               <button onClick={onLogout} className="btn-ghost py-1.5 px-3 text-sm">
                 Salir
               </button>

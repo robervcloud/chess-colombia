@@ -9,7 +9,8 @@ const usernameSchema = z
   .string()
   .min(3, 'El username debe tener al menos 3 caracteres')
   .max(30, 'El username no puede pasar de 30 caracteres')
-  .regex(/^[a-zA-Z0-9_-]+$/, 'Solo letras, números, guion y guion bajo');
+  .regex(/^[a-zA-Z0-9_-]+$/, 'Solo letras, números, guion y guion bajo')
+  .refine((u) => !u.toLowerCase().startsWith('guest_'), 'Ese prefijo está reservado');
 
 const passwordSchema = z
   .string()
@@ -57,6 +58,7 @@ const googleAuthSchema = z.object({
     .min(3)
     .max(30)
     .regex(/^[a-zA-Z0-9_-]+$/, 'Sólo letras, números, guion y guion bajo')
+    .refine((u) => !u.toLowerCase().startsWith('guest_'), 'Ese prefijo está reservado')
     .optional(),
 });
 

@@ -32,6 +32,7 @@ function initSocket(httpServer) {
         id: payload.sub,
         username: payload.username,
         country: payload.country,
+        guest: payload.guest === true,
       };
       next();
     } catch (err) {

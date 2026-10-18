@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import GoogleSignInButton from '@/components/GoogleSignInButton';
+import GuestButton from '@/components/GuestButton';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -72,6 +73,10 @@ export default function LoginPage() {
             {loading ? 'Entrando…' : 'Entrar'}
           </button>
         </form>
+
+        <div className="mt-4 flex justify-center">
+          <GuestButton className="btn-ghost w-full" hintClassName="text-wood-500 self-center" />
+        </div>
 
         <p className="text-center text-sm text-wood-600 mt-6">
           ¿No tienes cuenta?{' '}

@@ -282,6 +282,15 @@ function register(io, socket) {
   // ----- BUSCAR PARTIDA -----
   socket.on('match:find', async (raw, ack) => {
     try {
+      // Los invitados sólo juegan contra bots: así no afectan el rating
+      // de jugadores reales ni se usan para abusar del matchmaking.
+      if (user.guest) {
+        return ack?.({
+          ok: false,
+          error: 'Crea una cuenta gratis para jugar online contra otras personas.',
+        });
+      }
+
       const { countryFilter, timeControl } = matchmakingSchema.parse(raw || {});
 
       // Si Colombia es requerido, el jugador DEBE ser de CO

@@ -5,6 +5,7 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { AndeanMotif } from '@/components/AndeanMotif';
+import GuestButton from '@/components/GuestButton';
 
 /**
  * Landing — premium, minimalista, identidad colombiana sutil.
@@ -99,6 +100,7 @@ function Hero() {
           <Link href="/login" className="btn-ghost hover-lift">
             Ya tengo cuenta
           </Link>
+          <GuestButton />
         </div>
 
         {/* Microcopy de comunidad */}
@@ -290,6 +292,12 @@ function FinalCTA() {
           >
             Iniciar sesión
           </Link>
+        </div>
+        <div className="mt-6 flex justify-center">
+          <GuestButton
+            className="text-sm font-medium text-gold-light underline underline-offset-4 hover:text-gold transition-colors"
+            hintClassName="text-parch/60 self-center"
+          />
         </div>
       </div>
     </section>
